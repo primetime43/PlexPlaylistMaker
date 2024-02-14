@@ -24,7 +24,10 @@ Before you can use PlexPlaylistMaker, ensure you have the following:
 Download the program
 
 Install the required Python packages (or use the bat file in the source code):
-`pip install plexapi requests beautifulsoup4 imdbpy` 
+
+```bash
+pip install plexapi requests beautifulsoup4 imdbpy
+```
 
 # Usage
 * Login to Plex: Upon starting the application, click "Login and Fetch Servers" to authenticate with your Plex account.
