@@ -1,5 +1,5 @@
 # PlexPlaylistMaker
-PlexPlaylistMaker is a Python application designed to automate the creation of playlists in Plex Media Server using IMDb lists. It enables users to easily synchronize their favorite IMDb lists with their Plex library, ensuring that their media collection is always up-to-date with their preferences.
+PlexPlaylistMaker is a Python application designed to automate the creation of playlists in Plex Media Server using IMDb lists. It enables users to easily synchronize IMDb lists with their Plex library.
 
 # Features
 * IMDb List Integration: Import any public IMDb list URL to create a corresponding playlist in Plex.
@@ -8,7 +8,7 @@ PlexPlaylistMaker is a Python application designed to automate the creation of p
 * Error Handling: Robust error handling for IMDb data fetching and Plex playlist creation.
 * Multi-threaded IMDb Fetching: Speeds up the process of fetching movie details from IMDb by utilizing multi-threading.
 
-# ToDO
+# ToDo
 * Add support for other sites besides IMDb
 * Add better logging and more informative UI
 * Add UI progress bar/notification
