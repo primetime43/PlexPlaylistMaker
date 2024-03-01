@@ -51,12 +51,7 @@ class PlexIMDbApp:
                 return
         print(f"Failed to fetch details for {imdb_id} after {retry_count} attempts.")
         
-    def create_plex_playlist(self):
-        # Retrieve the IMDb List URL from the textbox
-        imdb_list_url = self.IMDB_covers_directory_textbox.get()
-        # Retrieve the Playlist name from the textbox
-        plex_playlist_name = self.IMDB_gamecache_textbox.get()
-
+    def create_plex_playlist(self, imdb_list_url, plex_playlist_name):
         # Initialize cinemagoer IMDb interface
         ia = imdb.Cinemagoer()
 
@@ -142,5 +137,5 @@ def check_updates(version: str):
         rep_version = version
 
     return (
-        f"Plex Playlist Maker - {version}{' | NEW VERSION AVAILABLE' if version < rep_version else ''}"
+        f"PlexPlaylistMaker - {version}{' | NEW VERSION AVAILABLE' if version < rep_version else ''}"
     )

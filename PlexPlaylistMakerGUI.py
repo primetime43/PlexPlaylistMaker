@@ -17,10 +17,10 @@ class PlexPlaylistMakerGUI(ctk.CTk):
         self.font = ("MS Sans Serif", 12, "bold")
         self.grid_rowconfigure(0, weight=1)
         self.grid_columnconfigure(1, weight=1)
+        self.servers = []  # Initialize an empty list to store server names
         
         # Initialize the server variable
         self.server_var = tk.StringVar(self)
-        self.testServersArray = []
 
         # region nav frame
         self.navigation_frame = ctk.CTkFrame(self, corner_radius=0)
@@ -50,7 +50,7 @@ class PlexPlaylistMakerGUI(ctk.CTk):
             hover_color=("gray70", "gray30"),
             anchor="w",
             image=self.IMDb_image,
-            command=self.imdb_button_event,
+            command=lambda: self.select_frame_by_name("imdb_frame"),
         )
         self.IMDB.grid(row=1, column=0, sticky="ew")
 
@@ -66,7 +66,7 @@ class PlexPlaylistMakerGUI(ctk.CTk):
             hover_color=("gray70", "gray30"),
             anchor="w",
             image=self.Letterboxd_image,
-            command=self.letterboxd_button_event,
+            command=lambda: self.select_frame_by_name("letterboxd_frame"),
         )
         self.Letterboxd.grid(row=2, column=0, sticky="ew")
 
@@ -78,37 +78,39 @@ class PlexPlaylistMakerGUI(ctk.CTk):
         )
 
         # IMDb List URL textbox
-        self.IMDB_covers_directory_textbox = ctk.CTkEntry(
+        self.IMDB_playlist_url_textbox = ctk.CTkEntry(
             self.IMDB_frame, placeholder_text="IMDb List URL", width=200
         )
-        self.IMDB_covers_directory_textbox.grid(
+        self.IMDB_playlist_url_textbox.grid(
             row=0, column=0, padx=10, pady=10, sticky="w"
         )
 
         # Playlist name textbox
-        self.IMDB_gamecache_textbox = ctk.CTkEntry(
+        self.IMDB_playlist_name_textbox = ctk.CTkEntry(
             self.IMDB_frame, placeholder_text="Playlist Name", width=200
         )
-        self.IMDB_gamecache_textbox.grid(
+        self.IMDB_playlist_name_textbox.grid(
             row=1, column=0, padx=10, pady=10, sticky="w"
         )
 
         # Dropdown menu for Plex Servers
-        self.IMDB_server_var = tk.StringVar(self.IMDB_frame)
         self.IMDB_server_menu = ctk.CTkOptionMenu(
             self.IMDB_frame, 
             variable=self.server_var,
-            values=self.testServersArray
+            values=["Loading servers..."]  # Placeholder text
         )
         self.IMDB_server_menu.grid(row=2, column=0, padx=10, pady=10, sticky="w")
         
         # IMDb Create Playlist Button
-        self.start_download_button = ctk.CTkButton(
+        self.create_playlist_button = ctk.CTkButton(
             self.IMDB_frame,
             text="Create Playlist",
-            command=lambda: self.create_plex_playlist()
+            command=lambda: self.controller.create_plex_playlist(
+                self.IMDB_playlist_url_textbox.get(), 
+                self.IMDB_playlist_name_textbox.get()
+            )
         )
-        self.start_download_button.grid(
+        self.create_playlist_button.grid(
             row=6, column=0, padx=10, pady=10, sticky="w")
 
         # endregion
@@ -117,82 +119,40 @@ class PlexPlaylistMakerGUI(ctk.CTk):
         self.Letterboxd_frame = ctk.CTkFrame(
             self, corner_radius=0, fg_color="transparent")
 
-        # Letterboxd covers Dir textbox
-        self.Letterboxd_covers_directory_textbox = ctk.CTkEntry(
-            self.Letterboxd_frame, placeholder_text="Cover Directory", width=200
+        # Letterboxd List URL textbox
+        self.Letterboxd_playlist_url_textbox = ctk.CTkEntry(
+            self.Letterboxd_frame, placeholder_text="Letterboxd List URL", width=200
         )
-        self.Letterboxd_covers_directory_textbox.grid(
+        self.Letterboxd_playlist_url_textbox.grid(
             row=0, column=0, padx=10, pady=10, sticky="w"
         )
 
-        # Letterboxd browser button
-        self.Letterboxd_covers_directory_button = ctk.CTkButton(
+        # Playlist name textbox
+        self.Letterboxd_playlist_name_textbox = ctk.CTkEntry(
+            self.Letterboxd_frame, placeholder_text="Playlist Name", width=200
+        )
+        self.Letterboxd_playlist_name_textbox.grid(
+            row=1, column=0, padx=10, pady=10, sticky="w"
+        )
+
+        # Dropdown menu for Plex Servers
+        self.Letterboxd_server_menu = ctk.CTkOptionMenu(
+            self.Letterboxd_frame, 
+            variable=self.server_var,
+            values=["Loading servers..."]  # Placeholder text
+        )
+        self.Letterboxd_server_menu.grid(row=2, column=0, padx=10, pady=10, sticky="w")
+        
+        # Letterboxd Create Playlist Button
+        self.create_playlist_button = ctk.CTkButton(
             self.Letterboxd_frame,
-            text="Browse",
-            command=lambda: self.select_directory("Letterboxd", False),
-            width=10,
+            text="Create Playlist",
+            command=lambda: self.controller.create_plex_playlist(
+                self.Letterboxd_playlist_url_textbox.get(), 
+                self.Letterboxd_playlist_name_textbox.get()
+            )
         )
-        self.Letterboxd_covers_directory_button.grid(
-            row=0, column=1, padx=5, pady=5, sticky="e"
-        )
-
-        # Letterboxd cache textbox
-        self.Letterboxd_gamecache_textbox = ctk.CTkEntry(
-            self.Letterboxd_frame, placeholder_text="Game Cache", width=200
-        )
-        self.Letterboxd_gamecache_textbox.grid(
-            row=1, column=0, padx=10, pady=10, sticky="w")
-
-        # Letterboxd browser button
-        self.Letterboxd_gamecache_button = ctk.CTkButton(
-            self.Letterboxd_frame,
-            text="Browse",
-            command=lambda: self.select_directory("Letterboxd", True),
-            width=10,
-        )
-        self.Letterboxd_gamecache_button.grid(
-            row=1, column=1, padx=5, pady=5, sticky="e")
-
-        self.Letterboxd_cover_type_var = tk.IntVar(value=0)
-
-        # Letterboxd covertype radiobuttons
-        self.Letterboxd_label_radio_group = ctk.CTkLabel(
-            master=self.Letterboxd_frame, text="Cover Type:"
-        )
-        self.Letterboxd_label_radio_group.grid(
-            row=2, column=0, padx=10, pady=10, sticky="w")
-
-        self.Letterboxd_radio_button_1 = ctk.CTkRadioButton(
-            master=self.Letterboxd_frame,
-            text="Default",
-            variable=self.Letterboxd_cover_type_var,
-            value=0,
-        )
-        self.Letterboxd_radio_button_1.grid(
-            row=3, column=0, pady=10, padx=20, sticky="w")
-
-        self.Letterboxd_radio_button_2 = ctk.CTkRadioButton(
-            master=self.Letterboxd_frame,
-            text="3D",
-            variable=self.Letterboxd_cover_type_var,
-            value=1,
-        )
-        self.Letterboxd_radio_button_2.grid(
-            row=4, column=0, pady=10, padx=20, sticky="w")
-
-        # Letterboxd use_ssl button
-        self.Letterboxd_use_ssl_checkbox = ctk.CTkCheckBox(
-            self.Letterboxd_frame, text="Use SSL")
-        self.Letterboxd_use_ssl_checkbox.grid(
-            row=5, column=0, padx=10, pady=10, sticky="w")
-
-        # Letterboxd download button
-        self.start_download_button = ctk.CTkButton(
-            self.Letterboxd_frame,
-            text="Start Download",
-            command=lambda: self.start_download("Letterboxd"),
-        )
-        self.start_download_button.grid(
+        self.create_playlist_button.grid(
             row=6, column=0, padx=10, pady=10, sticky="w")
 
         # endregion
@@ -204,54 +164,63 @@ class PlexPlaylistMakerGUI(ctk.CTk):
         self.loading_overlay.place(x=0, y=0, relwidth=1, relheight=1)
         self.loading_overlay_label = ctk.CTkLabel(self.loading_overlay, text="Loading...", font=("MS Sans Serif", 16, "bold"))
         self.loading_overlay_label.place(relx=0.5, rely=0.5, anchor=tk.CENTER)
+        self.loading_dots = 0
+        self.loading_animation_id = None  # Will store the ID of the scheduled after() call
         # Hide the overlay immediately after creating it
         self.hide_overlay()  # This line ensures the overlay is hidden by default
 
-    def select_frame_by_name(self, name):
-        self.current_frame = name  # Update the current frame name
-        self.IMDB.configure(
-            fg_color=("gray75", "gray25")
-            if name == "imdb_frame"
-            else "transparent"
-        )
-        self.Letterboxd.configure(
-            fg_color=(
-                "gray75", "gray25") if name == "letterboxd_frame" else "transparent"
-        )
+    def select_frame_by_name(self, frame_name):
+        """Selects and displays the specified frame, and performs common post-selection actions."""
+        self.current_frame = frame_name  # Update the current frame name
 
-        # show selected frame
-        if name == "imdb_frame":
+        # Configure button appearances based on selected frame
+        self.IMDB.configure(fg_color=("gray75", "gray25") if frame_name == "imdb_frame" else "transparent")
+        self.Letterboxd.configure(fg_color=("gray75", "gray25") if frame_name == "letterboxd_frame" else "transparent")
+
+        # Display the selected frame and hide the other
+        if frame_name == "imdb_frame":
             self.IMDB_frame.grid(row=0, column=1, sticky="nsew")
             self.Letterboxd_frame.grid_forget()
-        elif name == "letterboxd_frame":
+        elif frame_name == "letterboxd_frame":
             self.Letterboxd_frame.grid(row=0, column=1, sticky="nsew")
             self.IMDB_frame.grid_forget()
+
+        # Common functionality after selecting the frame (e.g., login and fetch servers)
+        if not self.controller.server:
+            threading.Thread(target=self.async_login_and_fetch_servers).start()
+
 
     def imdb_button_event(self):
         self.select_frame_by_name("imdb_frame")
         # Check if a server is already connected before attempting to log in again
         if not self.controller.server:
             # No server connection exists, so attempt to log in and fetch servers
-            #self.controller.login_and_fetch_servers(self.update_server_dropdown, self.server_var)
             # Run the login and fetch operation in a separate thread
             threading.Thread(target=self.async_login_and_fetch_servers).start()
-        else:
-            # A server connection exists
-            self.update_server_dropdown([self.controller.server.name], self.server_var)
             
+    def letterboxd_button_event(self):
+        self.select_frame_by_name("letterboxd_frame")
+        # Check if a server is already connected before attempting to log in again
+        if not self.controller.server:
+            # No server connection exists, so attempt to log in and fetch servers
+            # Run the login and fetch operation in a separate thread
+            threading.Thread(target=self.async_login_and_fetch_servers).start()
+        
     def async_login_and_fetch_servers(self):
-        # Show the loading overlay
-        #self.show_overlay()
-        # Perform the login and fetch operation. This method will run on a separate thread
-        self.controller.login_and_fetch_servers(self.update_server_dropdown_threadsafe, self.server_var)
-        # Schedule the hide_overlay to run on the main thread after completion
-        #self.after(0, self.hide_overlay)
-
-    def update_server_dropdown_threadsafe(self, servers, server_var):
-        # Schedule the original update_server_dropdown method to run on the main thread
-        self.after(0, self.update_server_dropdown, servers, server_var)
-        # Hide the overlay after updating the server dropdown
-        #self.after(0, self.hide_overlay)
+        """Fetch servers without blocking the UI, updating both menus on completion."""
+        def fetch_servers():
+            # Show the loading overlay
+            self.show_overlay()
+            # Perform the login and fetch operation. This method will run on a separate thread
+            self.controller.login_and_fetch_servers(self.update_server_menus, self.server_var)
+            # Schedule the hide_overlay to run on the main thread after completion
+            self.after(0, self.hide_overlay)
+            
+        # Check if servers have already been loaded
+        if not self.servers:
+            threading.Thread(target=fetch_servers).start()
+        else:
+            self.update_server_menus(self.servers)
         
     def show_overlay(self):
         self.loading_overlay.configure(width=450, height=350)
@@ -263,6 +232,8 @@ class PlexPlaylistMakerGUI(ctk.CTk):
         else:
             return  # If the frame is not recognized, do not show the overlay
         
+        self.loading_overlay_label.place(relx=0.3, rely=0.4, anchor=tk.CENTER) # Center the label
+        
         # Update layout to get current dimensions and positions
         frame.update_idletasks()
         x = frame.winfo_x()
@@ -270,32 +241,87 @@ class PlexPlaylistMakerGUI(ctk.CTk):
 
         # Place the overlay without trying to set width and height here
         self.loading_overlay.place(x=x, y=y, relwidth=1, relheight=1)
-
-
+        
+        # Start the loading text animation
+        self.update_loading_text()
 
     def hide_overlay(self):
         self.loading_overlay.place_forget()
-
-    def letterboxd_button_event(self):
-        self.controller.select_frame_by_name("letterboxd_frame")
+        # Stop the loading text animation by canceling the scheduled update
+        if self.loading_animation_id is not None:
+            self.after_cancel(self.loading_animation_id)
+            self.loading_animation_id = None
         
-    def update_server_dropdown(self, servers, server_var):
-        # Update the server dropdown based on the fetched servers
-        server_var.set(servers[0] if servers else "")
-        self.update_server_option_menu(servers)
-
-    def update_server_option_menu(self, server_names):
-        # Destroy the existing option menu widget, if it exists
-        if hasattr(self, 'IMDB_server_menu'):
-            self.IMDB_server_menu.destroy()
+    def update_loading_text(self):
+        if not self.loading_overlay.winfo_ismapped():
+            # If the overlay is no longer displayed, cancel further updates
+            if self.loading_animation_id is not None:
+                self.after_cancel(self.loading_animation_id)
+                self.loading_animation_id = None
+            return
         
+        self.loading_dots = (self.loading_dots + 1) % 4  # Cycle through 0 to 3
+        # Correctly form the new text for the label
+        text = "Loading" + "." * self.loading_dots + " " * (3 - self.loading_dots)
+        self.loading_overlay_label.configure(text=text)
+        self.loading_animation_id = self.after(500, self.update_loading_text)  # Schedule next update
+        
+    def recreate_server_dropdown(self, frame, variable, servers, row, column, padx, pady, sticky):
+        """
+        Recreate a server dropdown menu with updated servers.
+
+        Args:
+            frame: The parent frame where the dropdown will be placed.
+            variable: The tkinter variable associated with the dropdown.
+            servers: The list of server names to populate the dropdown.
+            row: The grid row where the dropdown will be placed.
+            column: The grid column where the dropdown will be placed.
+            padx: The padding along the x axis.
+            pady: The padding along the y axis.
+            sticky: The sticky option to define how the widget expands.
+        """
         # Create a new CTkOptionMenu with the updated server names
-        self.IMDB_server_menu = ctk.CTkOptionMenu(
-            self.IMDB_frame,
-            variable=self.server_var,
-            values=server_names  # Pass the updated list of server names here
+        server_menu = ctk.CTkOptionMenu(
+            frame,
+            variable=variable,
+            values=servers
         )
-        self.IMDB_server_menu.grid(row=2, column=0, padx=10, pady=10, sticky="w")
+        server_menu.grid(row=row, column=column, padx=padx, pady=pady, sticky=sticky)
+
+        # Set the default/selected server if the list is not empty
+        if servers:
+            variable.set(servers[0])
+
+        # Return the newly created dropdown menu
+        return server_menu
+        
+    def update_server_menus(self, servers, server_var=None):
+        """Recreate IMDb and Letterboxd server dropdown menus with updated servers."""
+        self.servers = servers  # Store the updated list of servers
+
+        # Recreate the IMDb server dropdown menu with updated servers
+        self.IMDB_server_menu = self.recreate_server_dropdown(
+            frame=self.IMDB_frame,
+            variable=self.server_var,
+            servers=servers,
+            row=2,
+            column=0,
+            padx=10,
+            pady=10,
+            sticky="w"
+        )
+
+        # Recreate the Letterboxd server dropdown menu with updated servers
+        self.Letterboxd_server_menu = self.recreate_server_dropdown(
+            frame=self.Letterboxd_frame,
+            variable=self.server_var,
+            servers=servers,
+            row=2,
+            column=0,
+            padx=10,
+            pady=10,
+            sticky="w"
+        )
 
 if __name__ == "__main__":
     app = PlexPlaylistMakerGUI()
