@@ -1,6 +1,7 @@
 import customtkinter as ctk
 import tkinter as tk
 import os
+import threading
 from PIL import Image
 from PlexPlaylistMakerController import PlexIMDbApp, check_updates
 
@@ -19,7 +20,6 @@ class PlexPlaylistMakerGUI(ctk.CTk):
         
         # Initialize the server variable
         self.server_var = tk.StringVar(self)
-        self.server = None  # This will hold the connected server object
         self.testServersArray = []
 
         # region nav frame
@@ -67,7 +67,6 @@ class PlexPlaylistMakerGUI(ctk.CTk):
             anchor="w",
             image=self.Letterboxd_image,
             command=self.letterboxd_button_event,
-            state="disabled",
         )
         self.Letterboxd.grid(row=2, column=0, sticky="ew")
 
@@ -197,8 +196,19 @@ class PlexPlaylistMakerGUI(ctk.CTk):
             row=6, column=0, padx=10, pady=10, sticky="w")
 
         # endregion
+        
+        self.current_frame = "imdb_frame"  # Default to IMDb frame
+        
+        # Overlay Frame for loading indication
+        self.loading_overlay = ctk.CTkFrame(self, width=450, height=350, corner_radius=10)
+        self.loading_overlay.place(x=0, y=0, relwidth=1, relheight=1)
+        self.loading_overlay_label = ctk.CTkLabel(self.loading_overlay, text="Loading...", font=("MS Sans Serif", 16, "bold"))
+        self.loading_overlay_label.place(relx=0.5, rely=0.5, anchor=tk.CENTER)
+        # Hide the overlay immediately after creating it
+        self.hide_overlay()  # This line ensures the overlay is hidden by default
 
     def select_frame_by_name(self, name):
+        self.current_frame = name  # Update the current frame name
         self.IMDB.configure(
             fg_color=("gray75", "gray25")
             if name == "imdb_frame"
@@ -219,8 +229,52 @@ class PlexPlaylistMakerGUI(ctk.CTk):
 
     def imdb_button_event(self):
         self.select_frame_by_name("imdb_frame")
-        # Call login_and_fetch_servers to populate the servers dropdown
-        self.controller.login_and_fetch_servers(self.update_server_dropdown, self.server_var)
+        # Check if a server is already connected before attempting to log in again
+        if not self.controller.server:
+            # No server connection exists, so attempt to log in and fetch servers
+            #self.controller.login_and_fetch_servers(self.update_server_dropdown, self.server_var)
+            # Run the login and fetch operation in a separate thread
+            threading.Thread(target=self.async_login_and_fetch_servers).start()
+        else:
+            # A server connection exists
+            self.update_server_dropdown([self.controller.server.name], self.server_var)
+            
+    def async_login_and_fetch_servers(self):
+        # Show the loading overlay
+        #self.show_overlay()
+        # Perform the login and fetch operation. This method will run on a separate thread
+        self.controller.login_and_fetch_servers(self.update_server_dropdown_threadsafe, self.server_var)
+        # Schedule the hide_overlay to run on the main thread after completion
+        #self.after(0, self.hide_overlay)
+
+    def update_server_dropdown_threadsafe(self, servers, server_var):
+        # Schedule the original update_server_dropdown method to run on the main thread
+        self.after(0, self.update_server_dropdown, servers, server_var)
+        # Hide the overlay after updating the server dropdown
+        #self.after(0, self.hide_overlay)
+        
+    def show_overlay(self):
+        self.loading_overlay.configure(width=450, height=350)
+        # Determine the frame on which to show the overlay based on the parameter
+        if self.current_frame == "imdb_frame":
+            frame = self.IMDB_frame
+        elif self.current_frame == "letterboxd_frame":
+            frame = self.Letterboxd_frame
+        else:
+            return  # If the frame is not recognized, do not show the overlay
+        
+        # Update layout to get current dimensions and positions
+        frame.update_idletasks()
+        x = frame.winfo_x()
+        y = frame.winfo_y()
+
+        # Place the overlay without trying to set width and height here
+        self.loading_overlay.place(x=x, y=y, relwidth=1, relheight=1)
+
+
+
+    def hide_overlay(self):
+        self.loading_overlay.place_forget()
 
     def letterboxd_button_event(self):
         self.controller.select_frame_by_name("letterboxd_frame")

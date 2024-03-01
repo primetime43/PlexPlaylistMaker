@@ -9,9 +9,12 @@ from queue import Queue
 import webbrowser
 from plexapi.myplex import MyPlexPinLogin, MyPlexAccount
 import time
-from imdb import IMDbDataAccessError    
+from imdb import IMDbDataAccessError  
  
 class PlexIMDbApp:   
+    def __init__(self):
+        self.server = None  # Initialize the server connection attribute
+        
     def login_and_fetch_servers(self, update_ui_callback, server_var):
         headers = {'X-Plex-Client-Identifier': 'unique_client_identifier'}
         pinlogin = MyPlexPinLogin(headers=headers, oauth=True)
@@ -23,10 +26,10 @@ class PlexIMDbApp:
             plex_account = MyPlexAccount(token=pinlogin.token)
             resources = [resource for resource in plex_account.resources() if resource.owned and resource.connections and resource.provides == 'server']
             servers = [resource.name for resource in resources]
-            # Call the callback to update the GUI with the servers list
-            update_ui_callback(servers, server_var)
             if servers:
-                self.server = plex_account.resource(servers[0]).connect()  # Make sure self.server is handled correctly
+                self.server = plex_account.resource(servers[0]).connect() 
+                # Call the callback to update the GUI with the servers list
+                update_ui_callback(servers, server_var)
         else:
             CTkMessagebox(title="Error", message="Could not log in to Plex account", option_1="OK")
         
@@ -118,19 +121,26 @@ class PlexIMDbApp:
             
 def check_updates(version: str):
     try:
-        rep_version = requests.get(
-            "URL_HERE"
-        ).text.strip()
+        # Fetch the latest release from GitHub API
+        response = requests.get(
+            "https://api.github.com/repos/primetime43/PlexPlaylistMaker/releases/latest"
+        )
+        data = response.json()
 
-        try:
-            rep_version = float(rep_version)
-        except ValueError:
+        # Check if 'tag_name' is in the response
+        if 'tag_name' in data:
+            rep_version = data['tag_name'].strip('v')
+
+            try:
+                rep_version = float(rep_version)
+            except ValueError:
+                rep_version = version
+        else:
             rep_version = version
 
     except requests.exceptions.RequestException:
         rep_version = version
 
     return (
-        f"Plex Playlist Maker - {version}{' | NEW VERSION AVAILABLE' if version !=
-                                rep_version else ''}"
+        f"Plex Playlist Maker - {version}{' | NEW VERSION AVAILABLE' if version < rep_version else ''}"
     )
