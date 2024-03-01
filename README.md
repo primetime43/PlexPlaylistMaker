@@ -26,7 +26,7 @@ Download the program
 Install the required Python packages (or use the bat file in the source code):
 
 ```bash
-pip install plexapi requests beautifulsoup4 imdbpy
+pip install requests plexapi beautifulsoup4 imdbpy Pillow customtkinter CTkMessagebox
 ```
 
 # Usage
