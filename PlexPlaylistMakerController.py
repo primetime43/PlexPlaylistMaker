@@ -51,7 +51,7 @@ class PlexIMDbApp:
                 return
         print(f"Failed to fetch details for {imdb_id} after {retry_count} attempts.")
         
-    def create_plex_playlist(self, imdb_list_url, plex_playlist_name):
+    def create_plex_playlist(self, imdb_list_url, plex_playlist_name, callback=None):
         # Initialize cinemagoer IMDb interface
         ia = imdb.Cinemagoer()
 
@@ -108,11 +108,13 @@ class PlexIMDbApp:
         # Create the playlist with the matched movies
         if movies_to_add:
             self.server.createPlaylist(plex_playlist_name, items=movies_to_add)
-            success_message = f"Created playlist '{plex_playlist_name}' with {len(movies_to_add)} movies out of {total_found_in_imdb_list} found in the IMDb list."
-            CTkMessagebox(title="Success", message=success_message, icon="check", option_1="OK")
+            success_message = f"Created playlist '{plex_playlist_name}' with {len(movies_to_add)} movies."
+            if callback:
+                callback(True, success_message)  # Call the callback with success status and message
         else:
-            error_message = f"No matching movies found in Plex library out of {total_found_in_imdb_list} movies in the IMDb list."
-            CTkMessagebox(title="Error", message=error_message, icon="cancel", option_1="OK")
+            error_message = "No matching movies found in Plex library."
+            if callback:
+                callback(False, error_message)  # Call the callback with failure status and message
             
 def check_updates(version: str):
     try:

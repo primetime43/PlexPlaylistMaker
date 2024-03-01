@@ -1,4 +1,5 @@
 import customtkinter as ctk
+from CTkMessagebox import CTkMessagebox
 import tkinter as tk
 import os
 import threading
@@ -102,16 +103,16 @@ class PlexPlaylistMakerGUI(ctk.CTk):
         self.IMDB_server_menu.grid(row=2, column=0, padx=10, pady=10, sticky="w")
         
         # IMDb Create Playlist Button
-        self.create_playlist_button = ctk.CTkButton(
+        self.imdb_create_playlist_button = ctk.CTkButton(
             self.IMDB_frame,
             text="Create Playlist",
-            command=lambda: self.controller.create_plex_playlist(
+            command=lambda: self.start_playlist_creation(
                 self.IMDB_playlist_url_textbox.get(), 
-                self.IMDB_playlist_name_textbox.get()
+                self.IMDB_playlist_name_textbox.get(),
+                self.imdb_create_playlist_button
             )
         )
-        self.create_playlist_button.grid(
-            row=6, column=0, padx=10, pady=10, sticky="w")
+        self.imdb_create_playlist_button.grid(row=6, column=0, padx=10, pady=10, sticky="w")
 
         # endregion
 
@@ -144,16 +145,16 @@ class PlexPlaylistMakerGUI(ctk.CTk):
         self.Letterboxd_server_menu.grid(row=2, column=0, padx=10, pady=10, sticky="w")
         
         # Letterboxd Create Playlist Button
-        self.create_playlist_button = ctk.CTkButton(
+        self.letterboxd_create_playlist_button = ctk.CTkButton(
             self.Letterboxd_frame,
             text="Create Playlist",
-            command=lambda: self.controller.create_plex_playlist(
+            command=lambda: self.start_playlist_creation(
                 self.Letterboxd_playlist_url_textbox.get(), 
-                self.Letterboxd_playlist_name_textbox.get()
+                self.Letterboxd_playlist_name_textbox.get(),
+                self.letterboxd_create_playlist_button
             )
         )
-        self.create_playlist_button.grid(
-            row=6, column=0, padx=10, pady=10, sticky="w")
+        self.letterboxd_create_playlist_button.grid(row=6, column=0, padx=10, pady=10, sticky="w")
 
         # endregion
         
@@ -266,6 +267,9 @@ class PlexPlaylistMakerGUI(ctk.CTk):
         self.loading_overlay_label.configure(text=text)
         self.loading_animation_id = self.after(500, self.update_loading_text)  # Schedule next update
         
+    def update_button_text(self, text, button):
+        button.configure(text=text)
+        
     def recreate_server_dropdown(self, frame, variable, servers, row, column, padx, pady, sticky):
         """
         Recreate a server dropdown menu with updated servers.
@@ -322,6 +326,40 @@ class PlexPlaylistMakerGUI(ctk.CTk):
             pady=10,
             sticky="w"
         )
+
+    def start_playlist_creation(self, url, name, button):
+        def run():
+            # Update button text to indicate process start
+            self.update_button_text_dynamically("Creating Playlist", button)
+            
+            # Call the create playlist method with a callback
+            self.controller.create_plex_playlist(url, name, lambda success, message: self.after(0, self.playlist_creation_callback, success, message, button))
+        
+        threading.Thread(target=run).start()
+
+    # Method to dynamically update button text with loading dots
+    def update_button_text_dynamically(self, base_text, button):
+        def update_text():
+            nonlocal base_text, dots
+            dots = (dots + 1) % 4
+            self.after(500, update_text)
+            self.update_button_text(f"{base_text}{'.' * dots}{' ' * (3 - dots)}", button)
+        
+        dots = 0
+        update_text()
+
+    # Callback method to be called once playlist creation is done
+    def playlist_creation_callback(self, success, message, button):
+        # Update the button text back to normal
+        self.update_button_text("Create Playlist", button)
+        
+        # Display the message using CTkMessagebox based on success status
+        if success:
+            CTkMessagebox(title="Success", message=message, icon="check", option_1="OK")
+        else:
+            CTkMessagebox(title="Error", message=message, icon="cancel", option_1="OK")
+
+
 
 if __name__ == "__main__":
     app = PlexPlaylistMakerGUI()
