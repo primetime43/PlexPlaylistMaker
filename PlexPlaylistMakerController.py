@@ -1,4 +1,3 @@
-from CTkMessagebox import CTkMessagebox
 import json
 import imdb
 import re
@@ -15,7 +14,7 @@ class PlexIMDbApp:
     def __init__(self):
         self.server = None  # Initialize the server connection attribute
         
-    def login_and_fetch_servers(self, update_ui_callback, server_var):
+    def login_and_fetch_servers(self, update_ui_callback):
         headers = {'X-Plex-Client-Identifier': 'unique_client_identifier'}
         pinlogin = MyPlexPinLogin(headers=headers, oauth=True)
         oauth_url = pinlogin.oauthUrl()
@@ -27,11 +26,13 @@ class PlexIMDbApp:
             resources = [resource for resource in plex_account.resources() if resource.owned and resource.connections and resource.provides == 'server']
             servers = [resource.name for resource in resources]
             if servers:
-                self.server = plex_account.resource(servers[0]).connect() 
-                # Call the callback to update the GUI with the servers list
-                update_ui_callback(servers, server_var)
+                self.server = plex_account.resource(servers[0]).connect()
+                # Successfully fetched servers, call the callback with success=True
+                update_ui_callback(servers=servers, success=True)
         else:
-            CTkMessagebox(title="Error", message="Could not log in to Plex account", option_1="OK")
+            # Failed to log in, call the callback with success=False
+            update_ui_callback(servers=None, success=False)
+
         
     def fetch_movie_details(self, queue, ia, imdb_id, retry_count=3, delay=1):
         attempts = 0

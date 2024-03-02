@@ -209,22 +209,43 @@ class PlexPlaylistMakerGUI(ctk.CTk):
         
     def async_login_and_fetch_servers(self):
         """Fetch servers without blocking the UI, updating both menus on completion."""
+        # Disable the buttons to prevent multiple clicks
+        self.IMDB.configure(state=ctk.DISABLED)
+        self.Letterboxd.configure(state=ctk.DISABLED)
+        
         def fetch_servers():
             # Show the loading overlay
             self.show_overlay()
             # Perform the login and fetch operation. This method will run on a separate thread
-            self.controller.login_and_fetch_servers(self.update_server_menus, self.server_var)
-            # Schedule the hide_overlay to run on the main thread after completion
-            self.after(0, self.hide_overlay)
-            
-        # Check if servers have already been loaded
-        if not self.servers:
-            threading.Thread(target=fetch_servers).start()
-        else:
-            self.update_server_menus(self.servers)
+            self.controller.login_and_fetch_servers(self.server_login_callback)
         
+        # Start the server fetching process
+        threading.Thread(target=fetch_servers).start()
+    
+    def server_login_callback(self, servers, success):
+        # Re-enable the IMDb and Letterboxd buttons after server fetch completes.
+        self.IMDB.configure(state=ctk.NORMAL)
+        self.Letterboxd.configure(state=ctk.NORMAL)
+        
+        if success:
+            # Update the UI with the server list if login was successful.
+            self.update_server_menus(servers)
+        else:
+            # Show an error message if login failed.
+            CTkMessagebox.show_error("Login Failed", "Could not log in to Plex account.")
+        
+        # Hide the overlay in all cases.
+        self.hide_overlay()
+    
+    def re_enable_buttons_and_hide_overlay(self):
+        """Re-enable the IMDb and Letterboxd buttons after server fetch completes."""
+        self.IMDB.configure(state=ctk.NORMAL)
+        self.Letterboxd.configure(state=ctk.NORMAL)
+        self.hide_overlay()
+
     def show_overlay(self):
         self.loading_overlay.configure(width=450, height=350)
+        self.loading_dots = 0
         # Determine the frame on which to show the overlay based on the parameter
         if self.current_frame == "imdb_frame":
             frame = self.IMDB_frame
@@ -254,18 +275,21 @@ class PlexPlaylistMakerGUI(ctk.CTk):
             self.loading_animation_id = None
         
     def update_loading_text(self):
+        """Update the loading text with animated dots."""
         if not self.loading_overlay.winfo_ismapped():
             # If the overlay is no longer displayed, cancel further updates
             if self.loading_animation_id is not None:
                 self.after_cancel(self.loading_animation_id)
                 self.loading_animation_id = None
             return
+
+        # Update the label with an increasing number of dots
+        self.loading_dots = (self.loading_dots + 1) % 4
+        loading_text = "Loading" + "." * self.loading_dots + " " * (3 - self.loading_dots)
+        self.loading_overlay_label.configure(text=loading_text)
         
-        self.loading_dots = (self.loading_dots + 1) % 4  # Cycle through 0 to 3
-        # Correctly form the new text for the label
-        text = "Loading" + "." * self.loading_dots + " " * (3 - self.loading_dots)
-        self.loading_overlay_label.configure(text=text)
-        self.loading_animation_id = self.after(500, self.update_loading_text)  # Schedule next update
+        # Reschedule this method to update the text again
+        self.loading_animation_id = self.after(500, self.update_loading_text)
         
     def update_button_text(self, text, button):
         button.configure(text=text)
@@ -329,29 +353,45 @@ class PlexPlaylistMakerGUI(ctk.CTk):
 
     def start_playlist_creation(self, url, name, button):
         def run():
-            # Update button text to indicate process start
-            self.update_button_text_dynamically("Creating Playlist", button)
+            # Update button text to indicate process start and "disable" by changing its command
+            self.after(0, lambda: self.update_button_text_dynamically("Creating Playlist", button, disable=True))
             
-            # Call the create playlist method with a callback
+            # Call the create playlist method
             self.controller.create_plex_playlist(url, name, lambda success, message: self.after(0, self.playlist_creation_callback, success, message, button))
         
         threading.Thread(target=run).start()
 
     # Method to dynamically update button text with loading dots
-    def update_button_text_dynamically(self, base_text, button):
-        def update_text():
-            nonlocal base_text, dots
-            dots = (dots + 1) % 4
-            self.after(500, update_text)
-            self.update_button_text(f"{base_text}{'.' * dots}{' ' * (3 - dots)}", button)
-        
-        dots = 0
-        update_text()
+    def update_button_text_dynamically(self, base_text, button, disable=False):
+        # Cancel any existing animation
+        if hasattr(button, '_animation_id'):
+            self.after_cancel(button._animation_id)
+            delattr(button, '_animation_id')
+
+        if disable:
+            # Store the original command to restore it later
+            if not hasattr(button, '_original_command'):
+                button._original_command = button.cget('command')
+                button.configure(command=lambda: None, state=ctk.DISABLED)  # Disable the button
+
+            def animate_dots(dots=1):
+                # Update the text with the next number of dots
+                button.configure(text=f"{base_text}{'.' * dots}")
+                # Schedule the next update, cycling back to 1 dot after 3
+                button._animation_id = self.after(500, animate_dots, (dots % 3) + 1)
+
+            animate_dots()  # Start the animation
+        else:
+            # Stop the animation and restore the button to its original state
+            if hasattr(button, '_original_command'):
+                button.configure(command=button._original_command)
+                delattr(button, '_original_command')
+            button.configure(text=base_text, state=ctk.NORMAL)  # Re-enable the button
 
     # Callback method to be called once playlist creation is done
     def playlist_creation_callback(self, success, message, button):
-        # Update the button text back to normal
-        self.update_button_text("Create Playlist", button)
+        # Stop any ongoing text animation and reset the button text and state
+        self.update_button_text_dynamically("Create Playlist", button, disable=False)
         
         # Display the message using CTkMessagebox based on success status
         if success:
