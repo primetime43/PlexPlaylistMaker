@@ -9,11 +9,11 @@ import webbrowser
 from plexapi.myplex import MyPlexPinLogin, MyPlexAccount
 import time
 from imdb import IMDbDataAccessError  
- 
-class PlexIMDbApp:   
+
+class PlexBaseApp:
     def __init__(self):
-        self.server = None  # Initialize the server connection attribute
-        
+        self.server = None # Initialize the server connection attribute
+    
     def login_and_fetch_servers(self, update_ui_callback):
         headers = {'X-Plex-Client-Identifier': 'unique_client_identifier'}
         pinlogin = MyPlexPinLogin(headers=headers, oauth=True)
@@ -32,7 +32,10 @@ class PlexIMDbApp:
         else:
             # Failed to log in, call the callback with success=False
             update_ui_callback(servers=None, success=False)
-
+ 
+class PlexIMDbApp(PlexBaseApp):   
+    def __init__(self):
+        super().__init__()
         
     def fetch_movie_details(self, queue, ia, imdb_id, retry_count=3, delay=1):
         attempts = 0
@@ -117,6 +120,11 @@ class PlexIMDbApp:
             if callback:
                 callback(False, error_message)  # Call the callback with failure status and message
             
+class PlexLetterboxdApp(PlexBaseApp):
+    def __init__(self):
+        super().__init__()
+    
+    
 def check_updates(version: str):
     try:
         # Fetch the latest release from GitHub API
