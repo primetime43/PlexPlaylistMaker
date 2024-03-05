@@ -8,12 +8,17 @@ from queue import Queue
 import webbrowser
 from plexapi.myplex import MyPlexPinLogin, MyPlexAccount
 import time
-from imdb import IMDbDataAccessError  
+from imdb import IMDbDataAccessError
+from abc import ABC, abstractmethod
 
-class PlexBaseApp:
+class PlexBaseApp(ABC):
     def __init__(self):
         self.server = None # Initialize the server connection attribute
         self.libraries = []  # Initialize the libraries attribute
+        
+    @abstractmethod
+    def create_plex_playlist(self, list_url, plex_playlist_name, library_name, callback=None):
+        pass
     
     def login_and_fetch_servers(self, update_ui_callback):
         headers = {'X-Plex-Client-Identifier': 'unique_client_identifier'}
@@ -99,9 +104,9 @@ class PlexIMDbApp(PlexBaseApp):
                     break
         return items_to_add
 
-    def create_plex_playlist(self, imdb_list_url, plex_playlist_name, library_name, callback=None):
+    def create_plex_playlist(self, list_url, plex_playlist_name, library_name, callback=None):
         ia = imdb.Cinemagoer()
-        imdb_ids = self.fetch_imdb_list_data(imdb_list_url)
+        imdb_ids = self.fetch_imdb_list_data(list_url)
         
         # Prepare for multithreading
         threads = []
@@ -137,6 +142,9 @@ class PlexIMDbApp(PlexBaseApp):
 class PlexLetterboxdApp(PlexBaseApp):
     def __init__(self):
         super().__init__()
+        
+    def create_plex_playlist(self, list_url, plex_playlist_name, library_name, callback=None):
+        print(f"Creating playlist '{plex_playlist_name}' in library '{library_name}' from Letterboxd list '{list_url}'")
     
     
 def check_updates(version: str):
