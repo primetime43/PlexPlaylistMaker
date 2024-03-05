@@ -222,11 +222,15 @@ class PlexPlaylistMakerGUI(ctk.CTk):
         """Switches the current controller to the IMDb controller."""
         if not isinstance(self.controller, PlexIMDbApp) or self.server_connection is None:
             self.controller = PlexIMDbApp(server=self.server_connection)
+        # Ensure the correct library_var is used for IMDb
+        self.library_var = self.IMDB_frame.library_var
 
     def switch_to_letterboxd_controller(self):
         """Switches the current controller to the Letterboxd controller."""
         if not isinstance(self.controller, PlexLetterboxdApp) or self.server_connection is None:
             self.controller = PlexLetterboxdApp(server=self.server_connection)
+        # Ensure the correct library_var is used for Letterboxd
+        self.library_var = self.Letterboxd_frame.library_var
 
     def imdb_button_event(self):
         self.select_frame_by_name("imdb_frame")
@@ -415,7 +419,15 @@ class PlexPlaylistMakerGUI(ctk.CTk):
         )
 
     def start_playlist_creation(self, url, name, button):
-        selected_library = self.library_var.get()  # Get the selected library name
+        # Determine which frame is currently active and get the selected library from the correct dropdown
+        if self.current_frame == "imdb_frame":
+            selected_library = self.IMDB_frame.library_var.get()
+        elif self.current_frame == "letterboxd_frame":
+            selected_library = self.Letterboxd_frame.library_var.get()
+        else:
+            CTkMessagebox(title="Error", message="Error: No active frame identified.", icon="cancel", option_1="OK")
+            return
+        
         def run():
             # Update button text to indicate process start and disable it
             self.after(0, lambda: self.update_button_text_dynamically("Creating Playlist", button, disable=True))
