@@ -102,6 +102,15 @@ class PlexPlaylistMakerGUI(ctk.CTk):
         )
         self.IMDB_server_menu.grid(row=2, column=0, padx=10, pady=10, sticky="w")
         
+        # Dropdown menu for selecting a library
+        self.library_var = tk.StringVar(self)
+        self.library_menu = ctk.CTkOptionMenu(
+            self.IMDB_frame,
+            variable=self.library_var,
+            values=["Loading libraries..."]  # Placeholder text
+        )
+        self.library_menu.grid(row=3, column=0, padx=10, pady=10, sticky="w")
+        
         # IMDb Create Playlist Button
         self.imdb_create_playlist_button = ctk.CTkButton(
             self.IMDB_frame,
@@ -230,6 +239,8 @@ class PlexPlaylistMakerGUI(ctk.CTk):
         if success:
             # Update the UI with the server list if login was successful.
             self.update_server_menus(servers)
+            filtered_libraries = [lib['name'] for lib in self.controller.libraries if lib['type'] in ('movie', 'show')]
+            self.update_library_dropdown(filtered_libraries)
         else:
             # Show an error message if login failed.
             CTkMessagebox.show_error("Login Failed", "Could not log in to Plex account.")
@@ -294,6 +305,37 @@ class PlexPlaylistMakerGUI(ctk.CTk):
     def update_button_text(self, text, button):
         button.configure(text=text)
         
+    # Method to update the library dropdown menu
+    #REMOVE
+    def update_library_menu(self):
+        # Filter libraries for 'movie' and 'show' types
+        filtered_libraries = [lib['name'] for lib in self.controller.libraries if lib['type'] in ('movie', 'show')]
+        
+        # Update the option menu values
+        self.library_menu.set_values(filtered_libraries)
+        
+        # Set the default value if there are any filtered libraries
+        if filtered_libraries:
+            self.library_var.set(filtered_libraries[0])
+            
+    def update_library_dropdown(self, libraries):
+        # Destroy the old dropdown if it exists
+        if hasattr(self, 'library_menu'):
+            self.library_menu.destroy()
+
+        # Create a new dropdown with the updated libraries
+        self.library_var = tk.StringVar(self)
+        self.library_menu = ctk.CTkOptionMenu(
+            self.IMDB_frame, 
+            variable=self.library_var,
+            values=libraries
+        )
+        self.library_menu.grid(row=3, column=0, padx=10, pady=10, sticky="w")
+
+        # Set the default value if libraries are available
+        if libraries:
+            self.library_var.set(libraries[0])
+        
     def recreate_server_dropdown(self, frame, variable, servers, row, column, padx, pady, sticky):
         """
         Recreate a server dropdown menu with updated servers.
@@ -352,12 +394,13 @@ class PlexPlaylistMakerGUI(ctk.CTk):
         )
 
     def start_playlist_creation(self, url, name, button):
+        selected_library = self.library_var.get()  # Get the selected library name
         def run():
-            # Update button text to indicate process start and "disable" by changing its command
+            # Update button text to indicate process start and disable it
             self.after(0, lambda: self.update_button_text_dynamically("Creating Playlist", button, disable=True))
             
-            # Call the create playlist method
-            self.controller.create_plex_playlist(url, name, lambda success, message: self.after(0, self.playlist_creation_callback, success, message, button))
+            # Call the create playlist method with the selected library
+            self.controller.create_plex_playlist(url, name, selected_library, lambda success, message: self.after(0, self.playlist_creation_callback, success, message, button))
         
         threading.Thread(target=run).start()
 

@@ -13,6 +13,7 @@ from imdb import IMDbDataAccessError
 class PlexBaseApp:
     def __init__(self):
         self.server = None # Initialize the server connection attribute
+        self.libraries = []  # Initialize the libraries attribute
     
     def login_and_fetch_servers(self, update_ui_callback):
         headers = {'X-Plex-Client-Identifier': 'unique_client_identifier'}
@@ -26,22 +27,33 @@ class PlexBaseApp:
             resources = [resource for resource in plex_account.resources() if resource.owned and resource.connections and resource.provides == 'server']
             servers = [resource.name for resource in resources]
             if servers:
+                # Connect to the first server
                 self.server = plex_account.resource(servers[0]).connect()
-                # Successfully fetched servers, call the callback with success=True
+                # Fetch and store libraries after successfully connecting to the server
+                self.fetch_and_store_libraries()
+                # Successfully fetched servers and libraries, call the callback with success=True
                 update_ui_callback(servers=servers, success=True)
         else:
             # Failed to log in, call the callback with success=False
             update_ui_callback(servers=None, success=False)
+            
+    def fetch_and_store_libraries(self):
+        if self.server:
+            # Retrieve all library sections from the server
+            libraries = self.server.library.sections()
+            self.libraries = [library.title for library in libraries]
+            # Storing more detailed information in a list of dictionaries:
+            self.libraries = [{'name': library.title, 'type': library.type, 'uuid': library.uuid} for library in libraries]
  
 class PlexIMDbApp(PlexBaseApp):   
     def __init__(self):
         super().__init__()
         
-    def fetch_movie_details(self, queue, ia, imdb_id, retry_count=3, delay=1):
+    def fetch_item_details(self, queue, ia, imdb_id, retry_count=3, delay=1):
         attempts = 0
         while attempts < retry_count:
             try:
-                movie = ia.get_movie(imdb_id[2:])  # Remove 'tt' prefix
+                movie = ia.get_movie(imdb_id[2:])  # Remove 'tt' prefix (works with movies/tv shows)
                 title = movie.data.get('original title', movie.get('title'))
                 if title:
                     queue.put((imdb_id, title))
@@ -55,7 +67,7 @@ class PlexIMDbApp(PlexBaseApp):
                 return
         print(f"Failed to fetch details for {imdb_id} after {retry_count} attempts.")
         
-    def create_plex_playlist(self, imdb_list_url, plex_playlist_name, callback=None):
+    def create_plex_playlist(self, imdb_list_url, plex_playlist_name, library_name, callback=None):
         # Initialize cinemagoer IMDb interface
         ia = imdb.Cinemagoer()
 
@@ -66,14 +78,12 @@ class PlexIMDbApp(PlexBaseApp):
 
         # Find the JSON data within the page
         json_str_match = re.search(r'<script type="application/ld\+json">(.+?)</script>', soup.prettify(), re.DOTALL)
-        imdb_movies = []
-        total_found_in_imdb_list = 0
+        imdb_list_items = []
         if json_str_match:
             json_str = json_str_match.group(1)
             try:
                 data = json.loads(json_str)
                 items = data.get("about", {}).get("itemListElement", [])
-                total_found_in_imdb_list = len(items)  # Total number of movies in IMDb list
                 threads = []
                 queue = Queue()
                 for item in items:
@@ -81,7 +91,7 @@ class PlexIMDbApp(PlexBaseApp):
                     imdb_id_match = re.search(r'/title/(tt\d+)/', url)
                     if imdb_id_match:
                         imdb_id = imdb_id_match.group(1)
-                        thread = Thread(target=self.fetch_movie_details, args=(queue, ia, imdb_id))
+                        thread = Thread(target=self.fetch_item_details, args=(queue, ia, imdb_id))
                         threads.append(thread)
                         thread.start()
 
@@ -91,28 +101,27 @@ class PlexIMDbApp(PlexBaseApp):
 
                 # Collect all results
                 while not queue.empty():
-                    imdb_movies.append(queue.get())
+                    imdb_list_items.append(queue.get())
             except json.JSONDecodeError as e:
                 print(f"Error decoding JSON: {e}")
                 return
 
-        # Find the 'Movies' section in the Plex library and retrieve all movies
-        library = self.server.library.section('Movies')
-        all_movies = library.all()
+        # Find the selected section in the Plex library and retrieve all items
+        library = self.server.library.section(library_name)
 
-        movies_to_add = []
-        for imdb_id, title in imdb_movies:
-            matched_movies = library.search(title=title, libtype='movie')
+        items_to_add_to_playlist = []
+        for imdb_id, title in imdb_list_items:
+            matched_movies = library.search(title=title, libtype=library.TYPE)
             for plex_movie in matched_movies:
                 # Matching based on title (maybe look into other attributes like year, etc. for better matching)
                 if title.lower() == plex_movie.title.lower():
-                    movies_to_add.append(plex_movie)
+                    items_to_add_to_playlist.append(plex_movie)
                     break  # Break if a match is found to avoid adding duplicates
 
         # Create the playlist with the matched movies
-        if movies_to_add:
-            self.server.createPlaylist(plex_playlist_name, items=movies_to_add)
-            success_message = f"Created playlist '{plex_playlist_name}' with {len(movies_to_add)} movies."
+        if items_to_add_to_playlist:
+            self.server.createPlaylist(plex_playlist_name, items=items_to_add_to_playlist)
+            success_message = f"Created playlist '{plex_playlist_name}' with {len(items_to_add_to_playlist)} movies."
             if callback:
                 callback(True, success_message)  # Call the callback with success status and message
         else:
