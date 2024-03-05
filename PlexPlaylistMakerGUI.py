@@ -78,6 +78,8 @@ class PlexPlaylistMakerGUI(ctk.CTk):
             self, corner_radius=0, fg_color="transparent"
         )
 
+        self.IMDB_frame.library_var = tk.StringVar(self)  # Initialize library_var for the IMDb frame
+        
         # IMDb List URL textbox
         self.IMDB_playlist_url_textbox = ctk.CTkEntry(
             self.IMDB_frame, placeholder_text="IMDb List URL", width=200
@@ -128,6 +130,8 @@ class PlexPlaylistMakerGUI(ctk.CTk):
         # region Letterboxd frame
         self.Letterboxd_frame = ctk.CTkFrame(
             self, corner_radius=0, fg_color="transparent")
+        
+        self.Letterboxd_frame.library_var = tk.StringVar(self)  # Initialize library_var for the Letterboxd frame
 
         # Letterboxd List URL textbox
         self.Letterboxd_playlist_url_textbox = ctk.CTkEntry(
@@ -152,6 +156,15 @@ class PlexPlaylistMakerGUI(ctk.CTk):
             values=["Loading servers..."]  # Placeholder text
         )
         self.Letterboxd_server_menu.grid(row=2, column=0, padx=10, pady=10, sticky="w")
+        
+        # Dropdown menu for selecting a library
+        self.library_var = tk.StringVar(self)
+        self.library_menu = ctk.CTkOptionMenu(
+            self.Letterboxd_frame,
+            variable=self.library_var,
+            values=["Loading libraries..."]  # Placeholder text
+        )
+        self.library_menu.grid(row=3, column=0, padx=10, pady=10, sticky="w")
         
         # Letterboxd Create Playlist Button
         self.letterboxd_create_playlist_button = ctk.CTkButton(
@@ -240,7 +253,8 @@ class PlexPlaylistMakerGUI(ctk.CTk):
             # Update the UI with the server list if login was successful.
             self.update_server_menus(servers)
             filtered_libraries = [lib['name'] for lib in self.controller.libraries if lib['type'] in ('movie', 'show')]
-            self.update_library_dropdown(filtered_libraries)
+            self.update_library_dropdown(filtered_libraries, self.IMDB_frame)
+            self.update_library_dropdown(filtered_libraries, self.Letterboxd_frame)
         else:
             # Show an error message if login failed.
             CTkMessagebox.show_error("Login Failed", "Could not log in to Plex account.")
@@ -304,37 +318,28 @@ class PlexPlaylistMakerGUI(ctk.CTk):
         
     def update_button_text(self, text, button):
         button.configure(text=text)
-        
-    # Method to update the library dropdown menu
-    #REMOVE
-    def update_library_menu(self):
-        # Filter libraries for 'movie' and 'show' types
-        filtered_libraries = [lib['name'] for lib in self.controller.libraries if lib['type'] in ('movie', 'show')]
-        
-        # Update the option menu values
-        self.library_menu.set_values(filtered_libraries)
-        
-        # Set the default value if there are any filtered libraries
-        if filtered_libraries:
-            self.library_var.set(filtered_libraries[0])
             
-    def update_library_dropdown(self, libraries):
-        # Destroy the old dropdown if it exists
-        if hasattr(self, 'library_menu'):
-            self.library_menu.destroy()
+    def update_library_dropdown(self, libraries, target_frame):
+        # Check if the library menu already exists in the target frame and destroy it if it does
+        if hasattr(target_frame, 'library_menu'):
+            target_frame.library_menu.destroy()
 
-        # Create a new dropdown with the updated libraries
-        self.library_var = tk.StringVar(self)
-        self.library_menu = ctk.CTkOptionMenu(
-            self.IMDB_frame, 
-            variable=self.library_var,
+        # Create a new dropdown for the updated libraries in the target frame
+        library_var = tk.StringVar(self)
+        library_menu = ctk.CTkOptionMenu(
+            target_frame,
+            variable=library_var,
             values=libraries
         )
-        self.library_menu.grid(row=3, column=0, padx=10, pady=10, sticky="w")
+        library_menu.grid(row=3, column=0, padx=10, pady=10, sticky="w")
 
         # Set the default value if libraries are available
         if libraries:
-            self.library_var.set(libraries[0])
+            library_var.set(libraries[0])
+
+        # Update the target frame attribute to hold the new library menu and variable
+        target_frame.library_menu = library_menu
+        target_frame.library_var = library_var
         
     def recreate_server_dropdown(self, frame, variable, servers, row, column, padx, pady, sticky):
         """
