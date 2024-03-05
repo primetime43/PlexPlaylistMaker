@@ -12,8 +12,8 @@ from imdb import IMDbDataAccessError
 from abc import ABC, abstractmethod
 
 class PlexBaseApp(ABC):
-    def __init__(self):
-        self.server = None # Initialize the server connection attribute
+    def __init__(self, server=None):
+        self.server = None # Initialize the server connection
         self.libraries = []  # Initialize the libraries attribute
         
     @abstractmethod
@@ -51,8 +51,8 @@ class PlexBaseApp(ABC):
             self.libraries = [{'name': library.title, 'type': library.type, 'uuid': library.uuid} for library in libraries]
  
 class PlexIMDbApp(PlexBaseApp):   
-    def __init__(self):
-        super().__init__()
+    def __init__(self, server=None):
+        super().__init__(server=server)
         
     def fetch_item_details(self, queue, ia, imdb_id, retry_count=3, delay=1):
         attempts = 0
@@ -140,8 +140,8 @@ class PlexIMDbApp(PlexBaseApp):
 
             
 class PlexLetterboxdApp(PlexBaseApp):
-    def __init__(self):
-        super().__init__()
+    def __init__(self, server=None):
+        super().__init__(server=server)
         
     def create_plex_playlist(self, list_url, plex_playlist_name, library_name, callback=None):
         print(f"Creating playlist '{plex_playlist_name}' in library '{library_name}' from Letterboxd list '{list_url}'")

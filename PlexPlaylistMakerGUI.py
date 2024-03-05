@@ -4,14 +4,15 @@ import tkinter as tk
 import os
 import threading
 from PIL import Image
-from PlexPlaylistMakerController import PlexIMDbApp, check_updates
+from PlexPlaylistMakerController import PlexIMDbApp, PlexLetterboxdApp, check_updates
 
 VERSION = 1.0
 
 class PlexPlaylistMakerGUI(ctk.CTk):
     def __init__(self):
         super().__init__()
-        self.controller = PlexIMDbApp()
+        self.controller = None
+        self.server_connection = None
         self.title(check_updates(VERSION))
         self.geometry("450x350")
         self.resizable(False, False)
@@ -200,6 +201,12 @@ class PlexPlaylistMakerGUI(ctk.CTk):
         self.IMDB.configure(fg_color=("gray75", "gray25") if frame_name == "imdb_frame" else "transparent")
         self.Letterboxd.configure(fg_color=("gray75", "gray25") if frame_name == "letterboxd_frame" else "transparent")
 
+        """Selects and displays the specified frame, and updates the controller."""
+        if frame_name == "imdb_frame":
+            self.switch_to_imdb_controller()
+        elif frame_name == "letterboxd_frame":
+            self.switch_to_letterboxd_controller()
+            
         # Display the selected frame and hide the other
         if frame_name == "imdb_frame":
             self.IMDB_frame.grid(row=0, column=1, sticky="nsew")
@@ -208,10 +215,18 @@ class PlexPlaylistMakerGUI(ctk.CTk):
             self.Letterboxd_frame.grid(row=0, column=1, sticky="nsew")
             self.IMDB_frame.grid_forget()
 
-        # Common functionality after selecting the frame (e.g., login and fetch servers)
-        if not self.controller.server:
+        if not self.server_connection:
             threading.Thread(target=self.async_login_and_fetch_servers).start()
+            
+    def switch_to_imdb_controller(self):
+        """Switches the current controller to the IMDb controller."""
+        if not isinstance(self.controller, PlexIMDbApp) or self.server_connection is None:
+            self.controller = PlexIMDbApp(server=self.server_connection)
 
+    def switch_to_letterboxd_controller(self):
+        """Switches the current controller to the Letterboxd controller."""
+        if not isinstance(self.controller, PlexLetterboxdApp) or self.server_connection is None:
+            self.controller = PlexLetterboxdApp(server=self.server_connection)
 
     def imdb_button_event(self):
         self.select_frame_by_name("imdb_frame")
@@ -240,6 +255,7 @@ class PlexPlaylistMakerGUI(ctk.CTk):
             self.show_overlay()
             # Perform the login and fetch operation. This method will run on a separate thread
             self.controller.login_and_fetch_servers(self.server_login_callback)
+            self.server_connection = self.controller.server  # Update the shared server connection
         
         # Start the server fetching process
         threading.Thread(target=fetch_servers).start()
