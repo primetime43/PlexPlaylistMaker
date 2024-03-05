@@ -54,7 +54,7 @@ class PlexIMDbApp(PlexBaseApp):
         while attempts < retry_count:
             try:
                 movie = ia.get_movie(imdb_id[2:])  # Remove 'tt' prefix (works with movies/tv shows)
-                title = movie.data.get('original title', movie.get('title'))
+                title = movie.get('title')
                 if title:
                     queue.put((imdb_id, title))
                     return
@@ -67,67 +67,72 @@ class PlexIMDbApp(PlexBaseApp):
                 return
         print(f"Failed to fetch details for {imdb_id} after {retry_count} attempts.")
         
-    def create_plex_playlist(self, imdb_list_url, plex_playlist_name, library_name, callback=None):
-        # Initialize cinemagoer IMDb interface
-        ia = imdb.Cinemagoer()
-
-        # Fetch IMDb list data
+    def fetch_imdb_list_data(self, imdb_list_url):
         response = requests.get(imdb_list_url)
         response.raise_for_status()
         soup = BeautifulSoup(response.text, 'html.parser')
-
-        # Find the JSON data within the page
         json_str_match = re.search(r'<script type="application/ld\+json">(.+?)</script>', soup.prettify(), re.DOTALL)
-        imdb_list_items = []
         if json_str_match:
             json_str = json_str_match.group(1)
-            try:
-                data = json.loads(json_str)
-                items = data.get("about", {}).get("itemListElement", [])
-                threads = []
-                queue = Queue()
-                for item in items:
-                    url = item.get("url", "")
-                    imdb_id_match = re.search(r'/title/(tt\d+)/', url)
-                    if imdb_id_match:
-                        imdb_id = imdb_id_match.group(1)
-                        thread = Thread(target=self.fetch_item_details, args=(queue, ia, imdb_id))
-                        threads.append(thread)
-                        thread.start()
+            data = json.loads(json_str)
+            itemListElements = data.get("about", {}).get("itemListElement", [])
+            imdb_ids = []
+            for item in itemListElements:
+                url = item.get("url", "")
+                imdb_id_match = re.search(r'/title/(tt\d+)/', url)
+                if imdb_id_match:
+                    imdb_id = imdb_id_match.group(1)
+                    # Validate the extracted IMDb ID
+                    if imdb_id and imdb_id.startswith("tt") and imdb_id[2:].isdigit():
+                        imdb_ids.append(imdb_id)
+            return imdb_ids
+        return []
 
-                # Wait for all threads to complete
-                for thread in threads:
-                    thread.join()
-
-                # Collect all results
-                while not queue.empty():
-                    imdb_list_items.append(queue.get())
-            except json.JSONDecodeError as e:
-                print(f"Error decoding JSON: {e}")
-                return
-
-        # Find the selected section in the Plex library and retrieve all items
+    def find_matched_items(self, library_name, imdb_list_items):
         library = self.server.library.section(library_name)
+        items_to_add = []
+        for title in imdb_list_items:
+            matched_items = library.search(title=title, libtype=library.TYPE)
+            for item in matched_items:
+                if title.lower() == item.title.lower():
+                    items_to_add.append(item)
+                    break
+        return items_to_add
 
-        items_to_add_to_playlist = []
-        for imdb_id, title in imdb_list_items:
-            matched_movies = library.search(title=title, libtype=library.TYPE)
-            for plex_movie in matched_movies:
-                # Matching based on title (maybe look into other attributes like year, etc. for better matching)
-                if title.lower() == plex_movie.title.lower():
-                    items_to_add_to_playlist.append(plex_movie)
-                    break  # Break if a match is found to avoid adding duplicates
+    def create_plex_playlist(self, imdb_list_url, plex_playlist_name, library_name, callback=None):
+        ia = imdb.Cinemagoer()
+        imdb_ids = self.fetch_imdb_list_data(imdb_list_url)
+        
+        # Prepare for multithreading
+        threads = []
+        queue = Queue()
+        for imdb_id in imdb_ids:
+            # Start a thread for each IMDb ID
+            thread = Thread(target=self.fetch_item_details, args=(queue, ia, imdb_id))
+            threads.append(thread)
+            thread.start()
 
-        # Create the playlist with the matched movies
-        if items_to_add_to_playlist:
-            self.server.createPlaylist(plex_playlist_name, items=items_to_add_to_playlist)
-            success_message = f"Created playlist '{plex_playlist_name}' with {len(items_to_add_to_playlist)} movies."
-            if callback:
-                callback(True, success_message)  # Call the callback with success status and message
+        # Wait for all threads to complete
+        for thread in threads:
+            thread.join()
+
+        # Collect all results
+        imdb_list_items = []
+        while not queue.empty():
+            imdb_list_items.append(queue.get())
+
+        # Find matched items in Plex library
+        matched_items = self.find_matched_items(library_name, [title for _, title in imdb_list_items])
+        
+        # Create the playlist
+        if matched_items:
+            self.server.createPlaylist(plex_playlist_name, items=matched_items)
+            success_message = f"Created playlist '{plex_playlist_name}' with {len(matched_items)} items."
+            if callback: callback(True, success_message)
         else:
-            error_message = "No matching movies found in Plex library."
-            if callback:
-                callback(False, error_message)  # Call the callback with failure status and message
+            error_message = "No matching items found in Plex library."
+            if callback: callback(False, error_message)
+
             
 class PlexLetterboxdApp(PlexBaseApp):
     def __init__(self):
