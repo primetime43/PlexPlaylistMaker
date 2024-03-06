@@ -47,3 +47,8 @@ pip install requests plexapi beautifulsoup4 imdbpy Pillow customtkinter CTkMessa
 # Credits
 * [primetime43](https://github.com/primetime43)
 * [xlenore](https://github.com/xlenore) for the basic UI layout
+
+## Command for packing into a single exe file
+```
+pyinstaller --onefile --noconsole --add-data "icons;icons" PlexPlaylistMakerGUI.py
+```
