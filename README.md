@@ -1,8 +1,12 @@
 # PlexPlaylistMaker
 PlexPlaylistMaker is an advanced Python application that facilitates the creation of Plex Media Server playlists directly from IMDb and Letterboxd lists. It provides a seamless integration, allowing users to enrich their Plex viewing experience by leveraging curated lists from popular movie databases.
 
-![image](https://github.com/primetime43/PlexPlaylistMaker/assets/12754111/c6ad2b05-5df9-44d3-9821-7ede76573fb0)
-![image](https://github.com/primetime43/PlexPlaylistMaker/assets/12754111/230cca13-7f2e-4cc1-b4cd-a2ab996eae4c)
+## Images of v1.0.0
+<details>
+  <summary>Click to view screenshots of version 1.0.0</summary>
+  <img src="https://github.com/primetime43/PlexPlaylistMaker/assets/12754111/c6ad2b05-5df9-44d3-9821-7ede76573fb0">
+  <img src="https://github.com/primetime43/PlexPlaylistMaker/assets/12754111/230cca13-7f2e-4cc1-b4cd-a2ab996eae4c">
+</details>
 
 # Features
 * Support for IMDb and Letterboxd: Create Plex playlists from public IMDb and Letterboxd lists using web scraping and the Cinemagoer API.
