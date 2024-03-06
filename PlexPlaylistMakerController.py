@@ -21,15 +21,23 @@ class PlexBaseApp(ABC):
         pass
     
     def find_matched_items(self, library_name, list_items):
-        library = self.server.library.section(library_name)
-        items_to_add = []
-        for title in list_items:
-            matched_items = library.search(title=title, libtype=library.TYPE)
-            for item in matched_items:
-                if title.lower() == item.title.lower():
-                    items_to_add.append(item)
-                    break
-        return items_to_add
+        if self.server is None:
+            print("Server connection is not established.")
+            return []
+            
+        try:
+            library = self.server.library.section(library_name)
+            items_to_add = []
+            for title in list_items:
+                matched_items = library.search(title=title, libtype=library.TYPE)
+                for item in matched_items:
+                    if title.lower() == item.title.lower():
+                        items_to_add.append(item)
+                        break
+            return items_to_add
+        except Exception as e:
+            print(f"An error occurred while finding matched items: {e}")
+            return []
     
     def login_and_fetch_servers(self, update_ui_callback):
         headers = {'X-Plex-Client-Identifier': 'unique_client_identifier'}
@@ -84,59 +92,72 @@ class PlexIMDbApp(PlexBaseApp):
         print(f"Failed to fetch details for {imdb_id} after {retry_count} attempts.")
         
     def fetch_imdb_list_data(self, imdb_list_url):
-        response = requests.get(imdb_list_url)
-        response.raise_for_status()
+        try:
+            response = requests.get(imdb_list_url, timeout=10)
+            response.raise_for_status() 
+        except requests.exceptions.HTTPError:
+            return [], "HTTP error occurred. Please check the URL."
+        except requests.exceptions.ConnectionError:
+            return [], "Connection error occurred. Please check your internet connection."
+        except requests.exceptions.Timeout:
+            return [], "Timeout error occurred. The request took too long to complete."
+        except requests.exceptions.RequestException:
+            return [], "An error occurred. Please try again."
+
         soup = BeautifulSoup(response.text, 'html.parser')
         json_str_match = re.search(r'<script type="application/ld\+json">(.+?)</script>', soup.prettify(), re.DOTALL)
         if json_str_match:
             json_str = json_str_match.group(1)
-            data = json.loads(json_str)
+            try:
+                data = json.loads(json_str)
+            except json.JSONDecodeError:
+                return [], "Failed to decode JSON from the webpage."
+
             itemListElements = data.get("about", {}).get("itemListElement", [])
-            imdb_ids = []
-            for item in itemListElements:
-                url = item.get("url", "")
-                imdb_id_match = re.search(r'/title/(tt\d+)/', url)
-                if imdb_id_match:
-                    imdb_id = imdb_id_match.group(1)
-                    # Validate the extracted IMDb ID
-                    if imdb_id and imdb_id.startswith("tt") and imdb_id[2:].isdigit():
-                        imdb_ids.append(imdb_id)
-            return imdb_ids
-        return []
+            imdb_ids = [item.get("url", "").split("/title/")[1].rstrip("/") for item in itemListElements if "/title/tt" in item.get("url", "")]
+            if imdb_ids:
+                return imdb_ids, "Data fetched successfully."
+            else:
+                return [], "No IMDb IDs found in the provided URL."
+
+        return [], "Failed to fetch data. Please check the URL format and try again."
 
     def create_plex_playlist(self, list_url, plex_playlist_name, library_name, callback=None):
-        ia = imdb.Cinemagoer()
-        imdb_ids = self.fetch_imdb_list_data(list_url)
+        if not list_url.strip():
+            callback(False, "URL is empty. Please provide a valid URL.")
+            return
         
+        imdb_ids, message = self.fetch_imdb_list_data(list_url)
+        if not imdb_ids:
+            callback(False, message) 
+            return
+
+        ia = imdb.Cinemagoer()
         # Prepare for multithreading
         threads = []
         queue = Queue()
         for imdb_id in imdb_ids:
-            # Start a thread for each IMDb ID
             thread = Thread(target=self.fetch_item_details, args=(queue, ia, imdb_id))
             threads.append(thread)
             thread.start()
 
-        # Wait for all threads to complete
         for thread in threads:
             thread.join()
 
-        # Collect all results
         imdb_list_items = []
         while not queue.empty():
             imdb_list_items.append(queue.get())
 
-        # Find matched items in Plex library
+        if not imdb_list_items:
+            callback(False, "No matching items found for given IMDb IDs.")
+            return
+
         matched_items = self.find_matched_items(library_name, [title for _, title in imdb_list_items])
-        
-        # Create the playlist
         if matched_items:
             self.server.createPlaylist(plex_playlist_name, items=matched_items)
-            success_message = f"Created playlist '{plex_playlist_name}' with {len(matched_items)} items."
-            if callback: callback(True, success_message)
+            callback(True, f"Created playlist '{plex_playlist_name}' with {len(matched_items)} items.")
         else:
-            error_message = "No matching items found in Plex library."
-            if callback: callback(False, error_message)
+            callback(False, "No matching items found in Plex library.")
 
             
 class PlexLetterboxdApp(PlexBaseApp):
@@ -145,7 +166,14 @@ class PlexLetterboxdApp(PlexBaseApp):
         
     # Maybe eventually use the offcial Letterboxd API instead of web scraping
     def create_plex_playlist(self, list_url, plex_playlist_name, library_name, callback=None):
-        item_objects = self.fetch_letterboxd_list_data(list_url)
+        if not list_url.strip():
+            callback(False, "URL is empty. Please provide a valid URL.")
+            return
+        
+        item_objects, message = self.fetch_letterboxd_list_data(list_url)
+        if not item_objects:
+            callback(False, message) 
+            return
         
         # Prepare for multithreading
         threads = []
@@ -176,10 +204,10 @@ class PlexLetterboxdApp(PlexBaseApp):
         if matched_items:
             self.server.createPlaylist(plex_playlist_name, items=matched_items)
             success_message = f"Created playlist '{plex_playlist_name}' with {len(matched_items)} items."
-            if callback: callback(True, success_message)
+            callback(True, success_message)
         else:
             error_message = "No matching items found in Plex library."
-            if callback: callback(False, error_message)
+            callback(False, error_message)
         
     def fetch_letterboxd_list_data(self, list_url):
         """
@@ -188,26 +216,40 @@ class PlexLetterboxdApp(PlexBaseApp):
         :param list_url: URL of the Letterboxd list
         :return: A list of dictionaries, each containing a movie's slug and film ID
         """
+        try:
+            response = requests.get(list_url, timeout=10)
+            response.raise_for_status()
+        except requests.exceptions.HTTPError:
+            return [], "HTTP error occurred. Please check the URL."
+        except requests.exceptions.ConnectionError:
+            return [], "Connection error occurred. Please check your internet connection."
+        except requests.exceptions.Timeout:
+            return [], "Timeout error occurred. The request took too long to complete."
+        except requests.exceptions.RequestException:
+            return [], "An error occurred. Please try again."
+    
         movies_data = []
-        
-        response = requests.get(list_url)
-        if response.status_code == 200:
-            soup = BeautifulSoup(response.text, 'html.parser')
-            
-            # Find all divs that contain movie poster information
-            poster_divs = soup.find_all('div', class_='film-poster')
-            for poster_div in poster_divs:
-                movie_slug = poster_div.get('data-film-slug')
-                film_id = poster_div.get('data-film-id')
-                
-                if movie_slug and film_id:
-                    movies_data.append({
-                        'slug': movie_slug.strip(),
-                        'film_id': film_id.strip(),
-                        'fullURL': f'https://letterboxd.com/film/{movie_slug.strip()}'
-                    })
+        soup = BeautifulSoup(response.text, 'html.parser')
 
-        return movies_data
+        poster_divs = soup.find_all('div', class_='film-poster')
+        if not poster_divs:
+            return [], "No movies found in the provided URL."
+
+        for poster_div in poster_divs:
+            movie_slug = poster_div.get('data-film-slug')
+            film_id = poster_div.get('data-film-id')
+
+            if movie_slug and film_id:
+                movies_data.append({
+                    'slug': movie_slug.strip(),
+                    'film_id': film_id.strip(),
+                    'fullURL': f'https://letterboxd.com/film/{movie_slug.strip()}'
+                })
+
+        if movies_data:
+            return movies_data, "Data fetched successfully."
+        else:
+            return [], "Failed to parse movie data. Please check the URL format and try again."
     
     def fetch_movie_details_from_slug_with_retry(self, slug_url, queue, retry_count=3, delay=1):
         """

@@ -220,17 +220,22 @@ class PlexPlaylistMakerGUI(ctk.CTk):
             
     def switch_to_imdb_controller(self):
         """Switches the current controller to the IMDb controller."""
-        if not isinstance(self.controller, PlexIMDbApp) or self.server_connection is None:
+        if not isinstance(self.controller, PlexIMDbApp):
             self.controller = PlexIMDbApp(server=self.server_connection)
+        # Ensure the server connection is set in the controller
+        self.controller.server = self.server_connection
         # Ensure the correct library_var is used for IMDb
         self.library_var = self.IMDB_frame.library_var
 
     def switch_to_letterboxd_controller(self):
         """Switches the current controller to the Letterboxd controller."""
-        if not isinstance(self.controller, PlexLetterboxdApp) or self.server_connection is None:
+        if not isinstance(self.controller, PlexLetterboxdApp):
             self.controller = PlexLetterboxdApp(server=self.server_connection)
+        # Ensure the server connection is set in the controller
+        self.controller.server = self.server_connection
         # Ensure the correct library_var is used for Letterboxd
         self.library_var = self.Letterboxd_frame.library_var
+
 
     def imdb_button_event(self):
         self.select_frame_by_name("imdb_frame")
