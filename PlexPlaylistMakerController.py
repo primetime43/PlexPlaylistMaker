@@ -92,9 +92,13 @@ class PlexIMDbApp(PlexBaseApp):
         print(f"Failed to fetch details for {imdb_id} after {retry_count} attempts.")
         
     def fetch_imdb_list_data(self, imdb_list_url):
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3'
+        }
+        
         try:
-            response = requests.get(imdb_list_url, timeout=10)
-            response.raise_for_status() 
+            response = requests.get(imdb_list_url, headers=headers, timeout=10)
+            response.raise_for_status()
         except requests.exceptions.HTTPError:
             return [], "HTTP error occurred. Please check the URL."
         except requests.exceptions.ConnectionError:
@@ -105,20 +109,18 @@ class PlexIMDbApp(PlexBaseApp):
             return [], "An error occurred. Please try again."
 
         soup = BeautifulSoup(response.text, 'html.parser')
-        json_str_match = re.search(r'<script type="application/ld\+json">(.+?)</script>', soup.prettify(), re.DOTALL)
-        if json_str_match:
-            json_str = json_str_match.group(1)
-            try:
-                data = json.loads(json_str)
-            except json.JSONDecodeError:
-                return [], "Failed to decode JSON from the webpage."
-
-            itemListElements = data.get("about", {}).get("itemListElement", [])
-            imdb_ids = [item.get("url", "").split("/title/")[1].rstrip("/") for item in itemListElements if "/title/tt" in item.get("url", "")]
-            if imdb_ids:
-                return imdb_ids, "Data fetched successfully."
-            else:
-                return [], "No IMDb IDs found in the provided URL."
+        
+        imdb_ids = []
+        for a_tag in soup.find_all('a', href=True):
+            href = a_tag['href']
+            imdb_id_match = re.search(r'/title/(tt\d+)/', href)
+            if imdb_id_match:
+                imdb_ids.append(imdb_id_match.group(1))
+        
+        if imdb_ids:
+            return imdb_ids, "Data fetched successfully."
+        else:
+            return [], "No IMDb IDs found in the provided URL."
 
         return [], "Failed to fetch data. Please check the URL format and try again."
 

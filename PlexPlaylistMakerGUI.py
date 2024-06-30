@@ -6,7 +6,7 @@ import threading
 from PIL import Image
 from PlexPlaylistMakerController import PlexIMDbApp, PlexLetterboxdApp, check_updates
 
-VERSION = 1.0
+VERSION = 1.1
 
 class PlexPlaylistMakerGUI(ctk.CTk):
     def __init__(self):
