@@ -91,7 +91,7 @@ class PlexPlaylistMakerGUI(ctk.CTk):
 
         # Playlist name textbox
         self.IMDB_playlist_name_textbox = ctk.CTkEntry(
-            self.IMDB_frame, placeholder_text="Playlist Name", width=200
+            self.IMDB_frame, placeholder_text="Leave blank for auto-title", width=200
         )
         self.IMDB_playlist_name_textbox.grid(
             row=1, column=0, padx=10, pady=10, sticky="w"
@@ -144,7 +144,7 @@ class PlexPlaylistMakerGUI(ctk.CTk):
 
         # Playlist name textbox
         self.Letterboxd_playlist_name_textbox = ctk.CTkEntry(
-            self.Letterboxd_frame, placeholder_text="Playlist Name", width=200
+            self.Letterboxd_frame, placeholder_text="Leave blank for auto-title", width=200
         )
         self.Letterboxd_playlist_name_textbox.grid(
             row=1, column=0, padx=10, pady=10, sticky="w"

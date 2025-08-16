@@ -13,7 +13,7 @@ PlexPlaylistMaker is a Python application that facilitates the creation of Plex 
 * Seamless Plex Server Integration: Compatible with any accessible Plex Media Server for playlist management.
 * Intuitive Graphical User Interface: Easy-to-navigate GUI for hassle-free list import and playlist creation.
 * Robust Error Handling: Advanced error handling for reliable data fetching and playlist creation.
-* Efficient Processing: Multi-threading for IMDb and Letterboxd data retrieval, offering fast synchronization.
+* Efficient Processing: Multi-threading for IMDb (and a polite sequential fetch for Letterboxd to mitigate rate limiting) data retrieval, offering fast synchronization.
 
 # Disclaimer
 PlexPlaylistMaker does not use the official APIs of IMDb or Letterboxd for data retrieval. Instead, it relies on web scraping techniques and the Cinemagoer API (a third-party IMDb interface) to gather list information.
@@ -22,6 +22,35 @@ PlexPlaylistMaker does not use the official APIs of IMDb or Letterboxd for data 
 * Support more sites possibly
 * Add better logging
 * Add UI progress bar/notification
+
+## Letterboxd Rate Limiting Notes
+Letterboxd can respond with HTTP 429 (Too Many Requests) if pages are fetched too quickly. The application now:
+
+* Uses a single shared `requests.Session` with browser-like headers.
+* Spaces film page requests by a minimum interval plus a small random jitter.
+* Honors `Retry-After` headers when present on 429 responses.
+* Applies exponential backoff with jitter for 429 and transient server/network errors.
+* Provides partial success messaging (e.g., number of skipped items) instead of failing the entire playlist creation.
+
+You can tune the constants near the top of the `PlexLetterboxdApp` class:
+
+* `MAX_RETRIES`
+* `BASE_DELAY`
+* `MIN_INTERVAL`
+* `JITTER_RANGE`
+
+If you still encounter many 429 responses:
+1. Increase `MIN_INTERVAL` (e.g., to 2.0 or 3.0 seconds).
+2. Decrease list size for large batches (split large Letterboxd lists into smaller chunks).
+3. Wait 10-15 minutes before retrying after heavy usage.
+
+### Letterboxd List Title Parsing
+When you leave the playlist name blank for a Letterboxd list, the app now applies heuristics to extract a clean title:
+* Considers `<h1>`, `og:title`, and `twitter:title` meta tags.
+* Removes trailing author phrases like "– A list by <user>" or "– A list of films by <user>".
+* Strips site suffixes like "- Letterboxd".
+* Falls back to the final URL slug segment if no title tags are parsed.
+Logging (INFO level) will show raw candidates and the selected cleaned title for troubleshooting.
 
 # Prerequisites
 Before you can use PlexPlaylistMaker, ensure you have the following:
@@ -41,7 +70,7 @@ pip install requests plexapi beautifulsoup4 imdbpy Pillow customtkinter CTkMessa
 1. Launch the App: Open PlexPlaylistMaker and log in to your Plex account.
 2. Select a Server: Choose the Plex server where the playlist will be created.
 3. Enter List URL: Paste the URL from IMDb or Letterboxd.
-4. Name Your Playlist: Define a unique name for your playlist.
+4. Name Your Playlist (Optional): If you leave the playlist name blank, the application will auto-name it using the List Title parsed from the source page (falls back to a cleaned URL slug if the title cannot be parsed).
 5. Create: Click on "Create Playlist" and wait for the process to complete, especially for larger lists.
 
 # Credits
