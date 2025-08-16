@@ -105,15 +105,28 @@ class PlexIMDbApp(PlexBaseApp):
             response = requests.get(imdb_list_url, headers=headers, timeout=10)
             response.raise_for_status()
         except requests.exceptions.HTTPError:
-            return [], "HTTP error occurred. Please check the URL."
+            return [], None, "HTTP error occurred. Please check the URL."
         except requests.exceptions.ConnectionError:
-            return [], "Connection error occurred. Please check your internet connection."
+            return [], None, "Connection error occurred. Please check your internet connection."
         except requests.exceptions.Timeout:
-            return [], "Timeout error occurred. The request took too long to complete."
+            return [], None, "Timeout error occurred. The request took too long to complete."
         except requests.exceptions.RequestException:
-            return [], "An error occurred. Please try again."
+            return [], None, "An error occurred. Please try again."
 
         soup = BeautifulSoup(response.text, 'html.parser')
+        # Attempt to extract a list title from typical IMDb list structures
+        list_title = None
+        h1 = soup.find('h1')
+        if h1 and h1.text.strip():
+            list_title = h1.text.strip()
+        if not list_title:
+            og_title_tag = soup.find('meta', property='og:title')
+            if og_title_tag and og_title_tag.get('content'):
+                list_title = og_title_tag['content'].strip()
+        if not list_title:
+            slug = imdb_list_url.rstrip('/').split('/')[-1]
+            if slug:
+                list_title = slug.replace('-', ' ').title()
         
         imdb_ids = []
         for a_tag in soup.find_all('a', href=True):
@@ -123,21 +136,27 @@ class PlexIMDbApp(PlexBaseApp):
                 imdb_ids.append(imdb_id_match.group(1))
         
         if imdb_ids:
-            return imdb_ids, "Data fetched successfully."
+            return imdb_ids, list_title, "Data fetched successfully."
         else:
-            return [], "No IMDb IDs found in the provided URL."
+            return [], list_title, "No IMDb IDs found in the provided URL."
 
-        return [], "Failed to fetch data. Please check the URL format and try again."
+        return [], list_title, "Failed to fetch data. Please check the URL format and try again."
 
     def create_plex_playlist(self, list_url, plex_playlist_name, library_name, callback=None):
         if not list_url.strip():
             callback(False, "URL is empty. Please provide a valid URL.")
             return
         
-        imdb_ids, message = self.fetch_imdb_list_data(list_url)
+        imdb_ids, derived_title, message = self.fetch_imdb_list_data(list_url)
         if not imdb_ids:
-            callback(False, message) 
+            callback(False, message)
             return
+        if not plex_playlist_name.strip():
+            if derived_title:
+                plex_playlist_name = derived_title
+            else:
+                slug = list_url.rstrip('/').split('/')[-1]
+                plex_playlist_name = slug.replace('-', ' ').title() if slug else 'IMDb List'
 
         ia = imdb.Cinemagoer()
         # Prepare for multithreading
@@ -187,17 +206,41 @@ class PlexLetterboxdApp(PlexBaseApp):
             'Connection': 'keep-alive'
         }
         self._last_request_time = 0.0
+
+    @staticmethod
+    def _derive_slug_title(list_url: str) -> str:
+        """Derive a human-friendly title strictly from the list slug in the URL.
+
+        Example:
+            https://letterboxd.com/crew/list/10-most-obsessively-rewatched-animation-films/
+            -> "10 Most Obsessively Rewatched Animation Films"
+        """
+        # Extract segment after '/list/' ignoring trailing slash
+        slug_match = re.search(r"/list/([^/]+)/?", list_url)
+        slug = slug_match.group(1) if slug_match else list_url.rstrip('/').split('/')[-1]
+        slug = slug or 'Letterboxd List'
+        words = re.split(r'[-_]+', slug)
+        # Title case each word unless it's all caps already
+        titled = ' '.join(w if w.isupper() else w.capitalize() for w in words)
+        return titled.strip()
         
     # Maybe eventually use the offcial Letterboxd API instead of web scraping
     def create_plex_playlist(self, list_url, plex_playlist_name, library_name, callback=None):
         if not list_url.strip():
             callback(False, "URL is empty. Please provide a valid URL.")
             return
-        
-        item_objects, message = self.fetch_letterboxd_list_data(list_url)
+
+        item_objects, derived_title, message = self.fetch_letterboxd_list_data(list_url)
         if not item_objects:
             callback(False, message)
             return
+        # Auto-name if user left playlist name blank
+        if not plex_playlist_name.strip():
+            if derived_title:
+                plex_playlist_name = derived_title
+            else:
+                slug = list_url.rstrip('/').split('/')[-1]
+                plex_playlist_name = slug.replace('-', ' ').title() if slug else 'Letterboxd List'
 
         # Sequential polite fetching to avoid triggering aggressive rate limits.
         movie_details_list = []
@@ -244,32 +287,33 @@ class PlexLetterboxdApp(PlexBaseApp):
         Fetch movie slugs and film IDs from a Letterboxd list.
         
         :param list_url: URL of the Letterboxd list
-        :return: A list of dictionaries, each containing a movie's slug and film ID
+        :return: (movies_data, list_title, message)
         """
         try:
             # Include headers & session reuse for list page too
             response = self.SESSION.get(list_url, headers=self.DEFAULT_HEADERS, timeout=15)
             response.raise_for_status()
         except requests.exceptions.HTTPError:
-            return [], "HTTP error occurred. Please check the URL."
+            return [], None, "HTTP error occurred. Please check the URL."
         except requests.exceptions.ConnectionError:
-            return [], "Connection error occurred. Please check your internet connection."
+            return [], None, "Connection error occurred. Please check your internet connection."
         except requests.exceptions.Timeout:
-            return [], "Timeout error occurred. The request took too long to complete."
+            return [], None, "Timeout error occurred. The request took too long to complete."
         except requests.exceptions.RequestException:
-            return [], "An error occurred. Please try again."
+            return [], None, "An error occurred. Please try again."
     
         movies_data = []
         soup = BeautifulSoup(response.text, 'html.parser')
+        list_title = self._derive_slug_title(list_url)
+        logging.info(f"Letterboxd derived slug title='{list_title}' from URL '{list_url}'")
 
         poster_divs = soup.find_all('div', class_='film-poster')
         if not poster_divs:
-            return [], "No movies found in the provided URL."
+            return [], list_title, "No movies found in the provided URL."
 
         for poster_div in poster_divs:
             movie_slug = poster_div.get('data-film-slug')
             film_id = poster_div.get('data-film-id')
-
             if movie_slug and film_id:
                 movies_data.append({
                     'slug': movie_slug.strip(),
@@ -278,9 +322,9 @@ class PlexLetterboxdApp(PlexBaseApp):
                 })
 
         if movies_data:
-            return movies_data, "Data fetched successfully."
+            return movies_data, list_title, "Data fetched successfully."
         else:
-            return [], "Failed to parse movie data. Please check the URL format and try again."
+            return [], list_title, "Failed to parse movie data. Please check the URL format and try again."
     
     def fetch_movie_details_from_slug_with_retry(self, slug_url):
         """Fetch movie original title from a Letterboxd film page with robust retry & backoff.
