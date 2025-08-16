@@ -45,12 +45,18 @@ If you still encounter many 429 responses:
 3. Wait 10-15 minutes before retrying after heavy usage.
 
 ### Letterboxd List Title Parsing
-When you leave the playlist name blank for a Letterboxd list, the app now applies heuristics to extract a clean title:
-* Considers `<h1>`, `og:title`, and `twitter:title` meta tags.
-* Removes trailing author phrases like "– A list by <user>" or "– A list of films by <user>".
-* Strips site suffixes like "- Letterboxd".
-* Falls back to the final URL slug segment if no title tags are parsed.
-Logging (INFO level) will show raw candidates and the selected cleaned title for troubleshooting.
+When you leave the playlist name blank for a Letterboxd list, the app now derives the title strictly from the list URL slug (the portion right after `/list/`). This ensures consistent, deterministic naming and avoids generic site titles. Example:
+
+`https://letterboxd.com/crew/list/10-most-obsessively-rewatched-animation-films/` → `10 Most Obsessively Rewatched Animation Films`
+
+IMDb lists still attempt to read the on‑page `<h1>` / `og:title` first, falling back to the slug if unavailable.
+
+### In-App Log Window
+You can now open a live, toggleable log window ("Show Logs" button in the left navigation) to monitor progress and rate‑limit handling:
+* Displays real-time INFO/WARNING/ERROR messages.
+* "Clear" button to wipe the current view.
+* "Hide" button (or toggle button) to stop polling and close the window.
+* Useful for seeing Letterboxd retry/backoff behavior or skipped items.
 
 # Prerequisites
 Before you can use PlexPlaylistMaker, ensure you have the following:
