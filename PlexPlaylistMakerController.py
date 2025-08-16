@@ -178,12 +178,25 @@ class PlexIMDbApp(PlexBaseApp):
             callback(False, "No matching items found for given IMDb IDs.")
             return
 
-        matched_items = self.find_matched_items(library_name, [title for _, title in imdb_list_items])
+        fetched_titles = [title for _, title in imdb_list_items]
+        matched_items = self.find_matched_items(library_name, fetched_titles)
+        matched_count = len(matched_items)
+        total_fetched = len(fetched_titles)
+        unmatched_count = total_fetched - matched_count
         if matched_items:
             self.server.createPlaylist(plex_playlist_name, items=matched_items)
-            callback(True, f"Created playlist '{plex_playlist_name}' with {len(matched_items)} items.")
+            logging.info(
+                f"Playlist created (IMDb): name='{plex_playlist_name}' matched={matched_count} "
+                f"unmatched={unmatched_count} total_fetched={total_fetched}"
+            )
+            msg = (
+                f"Created playlist '{plex_playlist_name}' with {matched_count} matched items. "
+                f"{unmatched_count} not found in Plex." if unmatched_count else
+                f"Created playlist '{plex_playlist_name}' with all {matched_count} items."
+            )
+            callback(True, msg)
         else:
-            callback(False, "No matching items found in Plex library.")
+            callback(False, "None of the fetched items were found in the Plex library.")
 
             
 class PlexLetterboxdApp(PlexBaseApp):
@@ -266,20 +279,38 @@ class PlexLetterboxdApp(PlexBaseApp):
 
         movie_titles = [details['original_title'] for details in movie_details_list]
         matched_items = self.find_matched_items(library_name, movie_titles)
+        requested_total = len(item_objects)
+        fetched_count = len(movie_details_list)
+        failures_count = len(failures)
+        matched_count = len(matched_items)
+        unmatched_fetched = fetched_count - matched_count
 
         if matched_items:
             self.server.createPlaylist(plex_playlist_name, items=matched_items)
-            partial_note = ""
-            if failures:
-                partial_note = f" (Skipped {len(failures)} fetch failures)"
-            success_message = f"Created playlist '{plex_playlist_name}' with {len(matched_items)} items{partial_note}."
-            callback(True, success_message)
+            logging.info(
+                "Playlist created (Letterboxd): name='%s' requested=%d fetched=%d matched=%d "
+                "unmatched_fetched=%d fetch_failures=%d" % (
+                    plex_playlist_name, requested_total, fetched_count, matched_count, unmatched_fetched, failures_count)
+            )
+            parts = [f"Created playlist '{plex_playlist_name}' with {matched_count} matched items."]
+            if unmatched_fetched:
+                parts.append(f"{unmatched_fetched} fetched but not in Plex.")
+            if failures_count:
+                parts.append(f"{failures_count} failed to fetch.")
+            callback(True, " ".join(parts))
         else:
-            if failures and movie_details_list:
-                callback(False, (
-                    "Fetched some film titles but none matched items in Plex library. "
-                    f"Additionally, {len(failures)} fetches failed (likely rate limited)."))
+            # None matched
+            if fetched_count:
+                msg = (f"Fetched {fetched_count} title(s) but none matched Plex library.")
+                if failures_count:
+                    msg += f" {failures_count} failed to fetch."
+                logging.info(
+                    "Playlist creation aborted (Letterboxd): name='%s' requested=%d fetched=%d matched=0 fetch_failures=%d" % (
+                        plex_playlist_name, requested_total, fetched_count, failures_count)
+                )
+                callback(False, msg)
             else:
+                # fetched_count == 0 already handled earlier, but just in case
                 callback(False, "No matching items found in Plex library.")
         
     def fetch_letterboxd_list_data(self, list_url):
@@ -305,7 +336,7 @@ class PlexLetterboxdApp(PlexBaseApp):
         movies_data = []
         soup = BeautifulSoup(response.text, 'html.parser')
         list_title = self._derive_slug_title(list_url)
-        logging.info(f"Letterboxd derived slug title='{list_title}' from URL '{list_url}'")
+        logging.debug(f"Letterboxd slug title='{list_title}' from URL '{list_url}'")
 
         poster_divs = soup.find_all('div', class_='film-poster')
         if not poster_divs:
@@ -365,12 +396,12 @@ class PlexLetterboxdApp(PlexBaseApp):
                         wait_time = int(retry_after_header) + random.uniform(*self.JITTER_RANGE)
                     else:
                         wait_time = (self.BASE_DELAY * (2 ** (attempt - 1))) + random.uniform(*self.JITTER_RANGE)
-                    logging.info(f"429 rate limited on attempt {attempt}/{self.MAX_RETRIES} for {slug_url}. Waiting {wait_time:.2f}s before retry.")
+                    logging.debug(f"429 rate limited attempt {attempt}/{self.MAX_RETRIES} for {slug_url}; wait {wait_time:.2f}s")
                     time.sleep(wait_time)
                     continue
                 elif status in (500, 502, 503, 504):
                     wait_time = (self.BASE_DELAY * (2 ** (attempt - 1))) + random.uniform(*self.JITTER_RANGE)
-                    logging.info(f"Server error {status} on attempt {attempt}/{self.MAX_RETRIES} for {slug_url}. Retrying in {wait_time:.2f}s.")
+                    logging.debug(f"Server error {status} attempt {attempt}/{self.MAX_RETRIES} for {slug_url}; retry in {wait_time:.2f}s")
                     time.sleep(wait_time)
                     continue
                 else:
@@ -378,7 +409,7 @@ class PlexLetterboxdApp(PlexBaseApp):
                     return None
             except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
                 wait_time = (self.BASE_DELAY * (2 ** (attempt - 1))) + random.uniform(*self.JITTER_RANGE)
-                logging.info(f"Network issue '{e}' on attempt {attempt}/{self.MAX_RETRIES} for {slug_url}. Retrying in {wait_time:.2f}s.")
+                logging.debug(f"Network issue '{e}' attempt {attempt}/{self.MAX_RETRIES} for {slug_url}; retry in {wait_time:.2f}s")
                 time.sleep(wait_time)
             except Exception as e:
                 logging.error(f"Unhandled exception fetching {slug_url}: {e}")

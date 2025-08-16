@@ -5,12 +5,51 @@ import os
 import threading
 from PIL import Image
 from PlexPlaylistMakerController import PlexIMDbApp, PlexLetterboxdApp, check_updates
+import logging
+import queue
+import re
 
 VERSION = 1.1
+
+class QueueHandler(logging.Handler):
+    """Thread-safe logging handler that funnels LogRecords into a queue for the GUI."""
+    SUPPRESS_PATTERNS = [
+        re.compile(r"Connection aborted", re.IGNORECASE),
+        re.compile(r"Max retries exceeded", re.IGNORECASE),
+        re.compile(r"Failed to establish a new connection", re.IGNORECASE),
+        re.compile(r"actively refused it", re.IGNORECASE),
+    ]
+    def __init__(self, log_queue: queue.Queue, suppress_connection_errors: bool = True):
+        super().__init__()
+        self.log_queue = log_queue
+        self.suppress_connection_errors = suppress_connection_errors
+    def emit(self, record):
+        try:
+            if self.suppress_connection_errors and record.levelno >= logging.ERROR:
+                txt = str(record.getMessage())
+                # If any suppression pattern matches, drop it
+                for pat in self.SUPPRESS_PATTERNS:
+                    if pat.search(txt):
+                        return
+            msg = self.format(record)
+            self.log_queue.put(msg)
+        except Exception:
+            self.handleError(record)
 
 class PlexPlaylistMakerGUI(ctk.CTk):
     def __init__(self):
         super().__init__()
+        # Logging queue & handler setup (before creating UI elements that may log)
+        self.log_queue = queue.Queue()
+        self.queue_handler = QueueHandler(self.log_queue, suppress_connection_errors=True)
+        formatter = logging.Formatter('[%(asctime)s] %(levelname)s: %(message)s')
+        self.queue_handler.setFormatter(formatter)
+        logging.getLogger().addHandler(self.queue_handler)
+        # Avoid duplicate logs if basicConfig already set root to INFO
+        logging.getLogger().setLevel(logging.INFO)
+        self.log_window = None
+        self.log_text_widget = None
+        self.log_polling = False
         self.controller = None
         self.server_connection = None
         self.title(check_updates(VERSION))
@@ -192,6 +231,95 @@ class PlexPlaylistMakerGUI(ctk.CTk):
         self.loading_animation_id = None  # Will store the ID of the scheduled after() call
         # Hide the overlay immediately after creating it
         self.hide_overlay()  # This line ensures the overlay is hidden by default
+
+        self.create_logging_toggle_button()
+
+        # Bind Ctrl+L to toggle connection error logging
+        self.bind('<Control-L>', self.toggle_connection_error_logging)
+
+    def create_logging_toggle_button(self):
+        """Add a button in the navigation frame to open/close the log window."""
+        self.log_toggle_button = ctk.CTkButton(
+            self.navigation_frame,
+            text="Show Logs",
+            height=32,
+            command=self.toggle_log_window,
+            font=("MS Sans Serif", 11, "bold")
+        )
+        self.log_toggle_button.grid(row=3, column=0, padx=5, pady=5, sticky="ew")
+
+    def toggle_log_window(self):
+        if self.log_window and tk.Toplevel.winfo_exists(self.log_window):
+            self.hide_log_window()
+        else:
+            self.show_log_window()
+
+    def show_log_window(self):
+        if self.log_window and tk.Toplevel.winfo_exists(self.log_window):
+            return
+        self.log_window = tk.Toplevel(self)
+        self.log_window.title("Application Logs")
+        self.log_window.geometry("650x300")
+        self.log_window.protocol("WM_DELETE_WINDOW", self.hide_log_window)
+        # Text widget with scrollbar
+        frame = tk.Frame(self.log_window)
+        frame.pack(fill=tk.BOTH, expand=True)
+        scrollbar = tk.Scrollbar(frame)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        self.log_text_widget = tk.Text(frame, wrap='word', state='disabled', bg='#111111', fg='#e0e0e0')
+        self.log_text_widget.pack(fill=tk.BOTH, expand=True)
+        self.log_text_widget.configure(yscrollcommand=scrollbar.set)
+        scrollbar.configure(command=self.log_text_widget.yview)
+        # Control buttons
+        btn_frame = tk.Frame(self.log_window)
+        btn_frame.pack(fill=tk.X)
+        clear_btn = tk.Button(btn_frame, text="Clear", command=self.clear_logs)
+        clear_btn.pack(side=tk.LEFT, padx=4, pady=4)
+        close_btn = tk.Button(btn_frame, text="Hide", command=self.hide_log_window)
+        close_btn.pack(side=tk.LEFT, padx=4, pady=4)
+        self.log_toggle_button.configure(text="Hide Logs")
+        self.start_log_polling()
+
+    def hide_log_window(self):
+        if self.log_window and tk.Toplevel.winfo_exists(self.log_window):
+            self.stop_log_polling()
+            self.log_window.destroy()
+        self.log_window = None
+        self.log_text_widget = None
+        self.log_toggle_button.configure(text="Show Logs")
+
+    def clear_logs(self):
+        if self.log_text_widget:
+            self.log_text_widget.configure(state='normal')
+            self.log_text_widget.delete('1.0', tk.END)
+            self.log_text_widget.configure(state='disabled')
+
+    def start_log_polling(self):
+        if not self.log_polling:
+            self.log_polling = True
+            self.after(200, self.poll_log_queue)
+
+    def stop_log_polling(self):
+        self.log_polling = False
+
+    def poll_log_queue(self):
+        if not self.log_polling:
+            return
+        try:
+            while True:
+                msg = self.log_queue.get_nowait()
+                self.append_log_message(msg)
+        except queue.Empty:
+            pass
+        self.after(500, self.poll_log_queue)
+
+    def append_log_message(self, msg: str):
+        if not self.log_text_widget:
+            return
+        self.log_text_widget.configure(state='normal')
+        self.log_text_widget.insert(tk.END, msg + "\n")
+        self.log_text_widget.configure(state='disabled')
+        self.log_text_widget.see(tk.END)
 
     def select_frame_by_name(self, frame_name):
         """Selects and displays the specified frame, and performs common post-selection actions."""
@@ -479,6 +607,14 @@ class PlexPlaylistMakerGUI(ctk.CTk):
             CTkMessagebox(title="Success", message=message, icon="check", option_1="OK")
         else:
             CTkMessagebox(title="Error", message=message, icon="cancel", option_1="OK")
+
+    def toggle_connection_error_logging(self, event=None):
+        """Keyboard shortcut to flip suppression of noisy connection errors (Ctrl+L)."""
+        if hasattr(self, 'queue_handler'):
+            self.queue_handler.suppress_connection_errors = not self.queue_handler.suppress_connection_errors
+            state = 'ON' if not self.queue_handler.suppress_connection_errors else 'OFF'
+            # Inject an informational line so user knows the state changed
+            self.log_queue.put(f"[LOG FILTER] Connection error messages now {('visible' if state=='ON' else 'hidden')}.")
 
 
 
