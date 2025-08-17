@@ -39,203 +39,108 @@ class QueueHandler(logging.Handler):
 class PlexPlaylistMakerGUI(ctk.CTk):
     def __init__(self):
         super().__init__()
-        # Logging queue & handler setup (before creating UI elements that may log)
+        # --- Logging setup ---
         self.log_queue = queue.Queue()
         self.queue_handler = QueueHandler(self.log_queue, suppress_connection_errors=True)
-        formatter = logging.Formatter('[%(asctime)s] %(levelname)s: %(message)s')
-        self.queue_handler.setFormatter(formatter)
+        self.queue_handler.setFormatter(logging.Formatter('[%(asctime)s] %(levelname)s: %(message)s'))
         logging.getLogger().addHandler(self.queue_handler)
-        # Avoid duplicate logs if basicConfig already set root to INFO
         logging.getLogger().setLevel(logging.INFO)
+
+        # --- Core state ---
         self.log_window = None
         self.log_text_widget = None
         self.log_polling = False
         self.controller = None
         self.server_connection = None
+        self.servers = []
+
+        # --- Window setup ---
         self.title(check_updates(VERSION))
         self.geometry("450x350")
         self.resizable(False, False)
         self.font = ("MS Sans Serif", 12, "bold")
         self.grid_rowconfigure(0, weight=1)
         self.grid_columnconfigure(1, weight=1)
-        self.servers = []  # Initialize an empty list to store server names
-        
-        # Initialize the server variable
+
+        # --- Variables ---
         self.server_var = tk.StringVar(self)
 
-        # region nav frame
+        # --- Navigation frame ---
         self.navigation_frame = ctk.CTkFrame(self, corner_radius=0)
         self.navigation_frame.grid(row=0, column=0, sticky="nsew")
         self.navigation_frame.grid_rowconfigure(4, weight=1)
 
-        image_path = os.path.join(os.path.dirname(
-            os.path.realpath(__file__)), "icons")
+        image_path = os.path.join(os.path.dirname(os.path.realpath(__file__)), "icons")
+        self.IMDb_image = ctk.CTkImage(Image.open(os.path.join(image_path, "IMDb.png")), size=(20, 20))
+        self.Letterboxd_image = ctk.CTkImage(Image.open(os.path.join(image_path, "Letterboxd.png")), size=(20, 20))
 
-        self.IMDb_image = ctk.CTkImage(
-            Image.open(image_path + "/IMDb.png"), size=(20, 20)
-        )
-
-        self.Letterboxd_image = ctk.CTkImage(
-            Image.open(image_path + "/Letterboxd.png"), size=(20, 20)
-        )
-
-        self.IMDB = ctk.CTkButton(
-            self.navigation_frame,
-            corner_radius=0,
-            height=40,
-            border_spacing=10,
-            font=self.font,
-            text="IMDb",
-            fg_color="transparent",
-            text_color=("gray10", "gray90"),
-            hover_color=("gray70", "gray30"),
-            anchor="w",
-            image=self.IMDb_image,
-            command=lambda: self.select_frame_by_name("imdb_frame"),
-        )
+        self.IMDB = ctk.CTkButton(self.navigation_frame, corner_radius=0, height=40, border_spacing=10,
+                                   font=self.font, text="IMDb", fg_color="transparent",
+                                   text_color=("gray10", "gray90"), hover_color=("gray70", "gray30"),
+                                   anchor="w", image=self.IMDb_image,
+                                   command=lambda: self.select_frame_by_name("imdb_frame"))
         self.IMDB.grid(row=1, column=0, sticky="ew")
 
-        self.Letterboxd = ctk.CTkButton(
-            self.navigation_frame,
-            corner_radius=0,
-            height=40,
-            border_spacing=10,
-            font=self.font,
-            text="Letterboxd",
-            fg_color="transparent",
-            text_color=("gray10", "gray90"),
-            hover_color=("gray70", "gray30"),
-            anchor="w",
-            image=self.Letterboxd_image,
-            command=lambda: self.select_frame_by_name("letterboxd_frame"),
-        )
+        self.Letterboxd = ctk.CTkButton(self.navigation_frame, corner_radius=0, height=40, border_spacing=10,
+                                        font=self.font, text="Letterboxd", fg_color="transparent",
+                                        text_color=("gray10", "gray90"), hover_color=("gray70", "gray30"),
+                                        anchor="w", image=self.Letterboxd_image,
+                                        command=lambda: self.select_frame_by_name("letterboxd_frame"))
         self.Letterboxd.grid(row=2, column=0, sticky="ew")
 
-        # endregion
-
-        # region IMDb frame
-        self.IMDB_frame = ctk.CTkFrame(
-            self, corner_radius=0, fg_color="transparent"
-        )
-
-        self.IMDB_frame.library_var = tk.StringVar(self)  # Initialize library_var for the IMDb frame
-        
-        # IMDb List URL textbox
-        self.IMDB_playlist_url_textbox = ctk.CTkEntry(
-            self.IMDB_frame, placeholder_text="IMDb List URL", width=200
-        )
-        self.IMDB_playlist_url_textbox.grid(
-            row=0, column=0, padx=10, pady=10, sticky="w"
-        )
-
-        # Playlist name textbox
-        self.IMDB_playlist_name_textbox = ctk.CTkEntry(
-            self.IMDB_frame, placeholder_text="Leave blank for auto-title", width=200
-        )
-        self.IMDB_playlist_name_textbox.grid(
-            row=1, column=0, padx=10, pady=10, sticky="w"
-        )
-
-        # Dropdown menu for Plex Servers
-        self.IMDB_server_menu = ctk.CTkOptionMenu(
-            self.IMDB_frame, 
-            variable=self.server_var,
-            values=["Loading servers..."]  # Placeholder text
-        )
+        # --- IMDb frame ---
+        self.IMDB_frame = ctk.CTkFrame(self, corner_radius=0, fg_color="transparent")
+        self.IMDB_frame.library_var = tk.StringVar(self)
+        self.IMDB_playlist_url_textbox = ctk.CTkEntry(self.IMDB_frame, placeholder_text="IMDb List URL", width=200)
+        self.IMDB_playlist_url_textbox.grid(row=0, column=0, padx=10, pady=10, sticky="w")
+        self.IMDB_playlist_name_textbox = ctk.CTkEntry(self.IMDB_frame, placeholder_text="Leave blank for auto-title", width=200)
+        self.IMDB_playlist_name_textbox.grid(row=1, column=0, padx=10, pady=10, sticky="w")
+        self.IMDB_server_menu = ctk.CTkOptionMenu(self.IMDB_frame, variable=self.server_var, values=["Loading servers..."])
         self.IMDB_server_menu.grid(row=2, column=0, padx=10, pady=10, sticky="w")
-        
-        # Dropdown menu for selecting a library
         self.library_var = tk.StringVar(self)
-        self.library_menu = ctk.CTkOptionMenu(
-            self.IMDB_frame,
-            variable=self.library_var,
-            values=["Loading libraries..."]  # Placeholder text
-        )
+        self.library_menu = ctk.CTkOptionMenu(self.IMDB_frame, variable=self.library_var, values=["Loading libraries..."])
         self.library_menu.grid(row=3, column=0, padx=10, pady=10, sticky="w")
-        
-        # IMDb Create Playlist Button
-        self.imdb_create_playlist_button = ctk.CTkButton(
-            self.IMDB_frame,
-            text="Create Playlist",
-            command=lambda: self.start_playlist_creation(
-                self.IMDB_playlist_url_textbox.get(), 
-                self.IMDB_playlist_name_textbox.get(),
-                self.imdb_create_playlist_button
-            )
-        )
+        self.imdb_create_playlist_button = ctk.CTkButton(self.IMDB_frame, text="Create Playlist",
+                                                         command=lambda: self.start_playlist_creation(
+                                                             self.IMDB_playlist_url_textbox.get(),
+                                                             self.IMDB_playlist_name_textbox.get(),
+                                                             self.imdb_create_playlist_button))
         self.imdb_create_playlist_button.grid(row=6, column=0, padx=10, pady=10, sticky="w")
 
-        # endregion
-
-        # region Letterboxd frame
-        self.Letterboxd_frame = ctk.CTkFrame(
-            self, corner_radius=0, fg_color="transparent")
-        
-        self.Letterboxd_frame.library_var = tk.StringVar(self)  # Initialize library_var for the Letterboxd frame
-
-        # Letterboxd List URL textbox
-        self.Letterboxd_playlist_url_textbox = ctk.CTkEntry(
-            self.Letterboxd_frame, placeholder_text="Letterboxd List URL", width=200
-        )
-        self.Letterboxd_playlist_url_textbox.grid(
-            row=0, column=0, padx=10, pady=10, sticky="w"
-        )
-
-        # Playlist name textbox
-        self.Letterboxd_playlist_name_textbox = ctk.CTkEntry(
-            self.Letterboxd_frame, placeholder_text="Leave blank for auto-title", width=200
-        )
-        self.Letterboxd_playlist_name_textbox.grid(
-            row=1, column=0, padx=10, pady=10, sticky="w"
-        )
-
-        # Dropdown menu for Plex Servers
-        self.Letterboxd_server_menu = ctk.CTkOptionMenu(
-            self.Letterboxd_frame, 
-            variable=self.server_var,
-            values=["Loading servers..."]  # Placeholder text
-        )
+        # --- Letterboxd frame ---
+        self.Letterboxd_frame = ctk.CTkFrame(self, corner_radius=0, fg_color="transparent")
+        self.Letterboxd_frame.library_var = tk.StringVar(self)
+        self.Letterboxd_playlist_url_textbox = ctk.CTkEntry(self.Letterboxd_frame, placeholder_text="Letterboxd List URL", width=200)
+        self.Letterboxd_playlist_url_textbox.grid(row=0, column=0, padx=10, pady=10, sticky="w")
+        self.Letterboxd_playlist_name_textbox = ctk.CTkEntry(self.Letterboxd_frame, placeholder_text="Leave blank for auto-title", width=200)
+        self.Letterboxd_playlist_name_textbox.grid(row=1, column=0, padx=10, pady=10, sticky="w")
+        self.Letterboxd_server_menu = ctk.CTkOptionMenu(self.Letterboxd_frame, variable=self.server_var, values=["Loading servers..."])
         self.Letterboxd_server_menu.grid(row=2, column=0, padx=10, pady=10, sticky="w")
-        
-        # Dropdown menu for selecting a library
         self.library_var = tk.StringVar(self)
-        self.library_menu = ctk.CTkOptionMenu(
-            self.Letterboxd_frame,
-            variable=self.library_var,
-            values=["Loading libraries..."]  # Placeholder text
-        )
+        self.library_menu = ctk.CTkOptionMenu(self.Letterboxd_frame, variable=self.library_var, values=["Loading libraries..."])
         self.library_menu.grid(row=3, column=0, padx=10, pady=10, sticky="w")
-        
-        # Letterboxd Create Playlist Button
-        self.letterboxd_create_playlist_button = ctk.CTkButton(
-            self.Letterboxd_frame,
-            text="Create Playlist",
-            command=lambda: self.start_playlist_creation(
-                self.Letterboxd_playlist_url_textbox.get(), 
-                self.Letterboxd_playlist_name_textbox.get(),
-                self.letterboxd_create_playlist_button
-            )
-        )
+        self.letterboxd_create_playlist_button = ctk.CTkButton(self.Letterboxd_frame, text="Create Playlist",
+                                                               command=lambda: self.start_playlist_creation(
+                                                                   self.Letterboxd_playlist_url_textbox.get(),
+                                                                   self.Letterboxd_playlist_name_textbox.get(),
+                                                                   self.letterboxd_create_playlist_button))
         self.letterboxd_create_playlist_button.grid(row=6, column=0, padx=10, pady=10, sticky="w")
 
-        # endregion
-        
-        self.current_frame = "imdb_frame"  # Default to IMDb frame
-        
-        # Overlay Frame for loading indication
+        self.current_frame = "imdb_frame"
+
+        # --- Loading overlay ---
         self.loading_overlay = ctk.CTkFrame(self, width=450, height=350, corner_radius=10)
         self.loading_overlay.place(x=0, y=0, relwidth=1, relheight=1)
         self.loading_overlay_label = ctk.CTkLabel(self.loading_overlay, text="Loading...", font=("MS Sans Serif", 16, "bold"))
         self.loading_overlay_label.place(relx=0.5, rely=0.5, anchor=tk.CENTER)
         self.loading_dots = 0
-        self.loading_animation_id = None  # Will store the ID of the scheduled after() call
-        # Hide the overlay immediately after creating it
-        self.hide_overlay()  # This line ensures the overlay is hidden by default
+        self.loading_animation_id = None
+        self.hide_overlay()
 
+        # --- Misc UI ---
         self.create_logging_toggle_button()
-
-        # Bind Ctrl+L to toggle connection error logging
         self.bind('<Control-L>', self.toggle_connection_error_logging)
+        self.update_create_buttons_state()
 
     def create_logging_toggle_button(self):
         """Add a button in the navigation frame to open/close the log window."""
@@ -478,26 +383,20 @@ class PlexPlaylistMakerGUI(ctk.CTk):
         button.configure(text=text)
             
     def update_library_dropdown(self, libraries, target_frame):
-        # Check if the library menu already exists in the target frame and destroy it if it does
-        if hasattr(target_frame, 'library_menu'):
+        """Recreate the library dropdown for the given frame."""
+        if hasattr(target_frame, 'library_menu') and target_frame.library_menu:
             target_frame.library_menu.destroy()
 
-        # Create a new dropdown for the updated libraries in the target frame
-        library_var = tk.StringVar(self)
-        library_menu = ctk.CTkOptionMenu(
-            target_frame,
-            variable=library_var,
-            values=libraries
-        )
-        library_menu.grid(row=3, column=0, padx=10, pady=10, sticky="w")
-
-        # Set the default value if libraries are available
+        lib_var = tk.StringVar(self)
+        menu = ctk.CTkOptionMenu(target_frame,
+                                 variable=lib_var,
+                                 values=libraries,
+                                 command=lambda _sel: self.library_selection_changed())
+        menu.grid(row=3, column=0, padx=10, pady=10, sticky="w")
         if libraries:
-            library_var.set(libraries[0])
-
-        # Update the target frame attribute to hold the new library menu and variable
-        target_frame.library_menu = library_menu
-        target_frame.library_var = library_var
+            lib_var.set(libraries[0])
+        target_frame.library_menu = menu
+        target_frame.library_var = lib_var
         
     def recreate_server_dropdown(self, frame, variable, servers, row, column, padx, pady, sticky):
         """
@@ -573,9 +472,27 @@ class PlexPlaylistMakerGUI(ctk.CTk):
             filtered_libraries = [lib['name'] for lib in self.controller.libraries if lib['type'] in ('movie', 'show')]
             self.after(0, self.update_library_dropdown, filtered_libraries, self.IMDB_frame)
             self.after(0, self.update_library_dropdown, filtered_libraries, self.Letterboxd_frame)
+            self.after(0, self.update_create_buttons_state)
         else:
             self.after(0, lambda: CTkMessagebox(title="Error", message=f"Failed to connect to server '{server_name}'.", icon="cancel", option_1="OK"))
         self.after(0, self.hide_overlay)
+
+    def library_selection_changed(self):
+        """Library dropdown changed; reevaluate button states."""
+        self.update_create_buttons_state()
+
+    def update_create_buttons_state(self):
+        """Enable or disable Create Playlist buttons based on server connection & library selection."""
+        server_ready = bool(self.controller and self.controller.server)
+        def lib_ok(frame):
+            return hasattr(frame, 'library_var') and frame.library_var.get() \
+                and frame.library_var.get() not in ("Select a server", "Loading libraries...")
+        imdb_ready = server_ready and lib_ok(self.IMDB_frame)
+        letter_ready = server_ready and lib_ok(self.Letterboxd_frame)
+        if hasattr(self, 'imdb_create_playlist_button'):
+            self.imdb_create_playlist_button.configure(state=ctk.NORMAL if imdb_ready else ctk.DISABLED)
+        if hasattr(self, 'letterboxd_create_playlist_button'):
+            self.letterboxd_create_playlist_button.configure(state=ctk.NORMAL if letter_ready else ctk.DISABLED)
 
     def start_playlist_creation(self, url, name, button):
         # Determine which frame is currently active and get the selected library from the correct dropdown
