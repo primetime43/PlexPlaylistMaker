@@ -12,6 +12,8 @@ from imdb import IMDbDataAccessError
 from abc import ABC, abstractmethod
 import random
 import logging
+import difflib
+import unicodedata
 
 # Configure a basic logger (prints to console). Users can customize or replace.
 logging.basicConfig(level=logging.INFO, format='[%(asctime)s] %(levelname)s: %(message)s')
@@ -21,6 +23,49 @@ class PlexBaseApp(ABC):
         self.server = server  # Server connection (plexapi.server.PlexServer)
         self.plex_account = None  # MyPlexAccount after authentication
         self.libraries = []  # Cached libraries metadata
+        # Fuzzy matching support
+        self._title_index = {}  # library_name -> {canonical_form: [items]}
+        self.FUZZY_THRESHOLD = 0.88
+
+    # ---------------- Normalization helpers -----------------
+    @staticmethod
+    def _strip_diacritics(text: str) -> str:
+        return ''.join(c for c in unicodedata.normalize('NFKD', text) if not unicodedata.combining(c))
+
+    @staticmethod
+    def _canonical_forms(title: str):
+        """Return set of canonical forms for a title (lowercase, articles normalized, punctuation removed)."""
+        if not title:
+            return set()
+        t = title.lower().strip()
+        # Move trailing ", The" -> leading
+        m = re.match(r'(.+),\s+(the|a|an)$', t)
+        if m:
+            t = f"{m.group(2)} {m.group(1)}"
+        def basic(x: str):
+            x = PlexBaseApp._strip_diacritics(x)
+            x = re.sub(r'[\u2019'"`]+", '', x)  # remove quote-like chars
+            x = re.sub(r'[^a-z0-9]+', ' ', x)  # non-alnum -> space
+            x = re.sub(r'\s+', ' ', x).strip()
+            return x
+        base = basic(t)
+        forms = {base}
+        forms.add(re.sub(r'^(the|a|an)\s+', '', base))
+        return {f for f in forms if f}
+
+    def _ensure_library_index(self, library_name: str, library):
+        if library_name in self._title_index:
+            return
+        idx = {}
+        try:
+            for item in library.all():
+                for form in self._canonical_forms(item.title):
+                    idx.setdefault(form, []).append(item)
+            self._title_index[library_name] = idx
+            logging.info(f"Indexed {len(idx)} canonical forms for library '{library_name}'.")
+        except Exception as e:
+            logging.error(f"Failed to build index for library '{library_name}': {e}")
+            self._title_index[library_name] = {}
         
     @abstractmethod
     def create_plex_playlist(self, list_url, plex_playlist_name, library_name, callback=None):
@@ -28,22 +73,61 @@ class PlexBaseApp(ABC):
     
     def find_matched_items(self, library_name, list_items):
         if self.server is None:
-            print("Server connection is not established.")
+            logging.warning("Server connection is not established.")
             return []
-            
         try:
             library = self.server.library.section(library_name)
-            items_to_add = []
-            for title in list_items:
-                matched_items = library.search(title=title, libtype=library.TYPE)
-                for item in matched_items:
-                    if title.lower() == item.title.lower():
-                        items_to_add.append(item)
-                        break
-            return items_to_add
         except Exception as e:
-            print(f"An error occurred while finding matched items: {e}")
+            logging.error(f"Unable to access library '{library_name}': {e}")
             return []
+
+        # Build index if not present
+        self._ensure_library_index(library_name, library)
+        index = self._title_index.get(library_name, {})
+        results = []
+        seen = set()
+        for raw_title in list_items:
+            if not raw_title:
+                continue
+            wanted_forms = self._canonical_forms(raw_title)
+            chosen = None
+            # 1. Exact canonical form
+            for form in wanted_forms:
+                if form in index:
+                    chosen = index[form][0]
+                    break
+            # 2. Fuzzy match if not found
+            if not chosen and index:
+                target = next(iter(wanted_forms)) if wanted_forms else ''
+                candidates = index.keys()
+                if target and target[0].isalpha():
+                    subset = [c for c in candidates if c.startswith(target[0])]
+                    if subset:
+                        candidates = subset
+                best_form = None
+                best_ratio = 0.0
+                for cand in candidates:
+                    r = difflib.SequenceMatcher(None, target, cand).ratio()
+                    if r > best_ratio:
+                        best_ratio = r
+                        best_form = cand
+                if best_form and best_ratio >= self.FUZZY_THRESHOLD:
+                    chosen = index[best_form][0]
+                    logging.debug(f"Fuzzy matched '{raw_title}' -> '{chosen.title}' ({best_ratio:.2f}).")
+            # 3. Legacy direct Plex search fallback
+            if not chosen:
+                try:
+                    plex_res = library.search(title=raw_title)
+                    for item in plex_res:
+                        if item.title.lower() == raw_title.lower() or (self._canonical_forms(item.title) & wanted_forms):
+                            chosen = item
+                            break
+                except Exception:
+                    pass
+            if chosen and chosen.ratingKey not in seen:
+                seen.add(chosen.ratingKey)
+                results.append(chosen)
+        return results
     
     def login_and_fetch_servers(self, update_ui_callback):
         headers = {'X-Plex-Client-Identifier': 'unique_client_identifier'}
