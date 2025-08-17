@@ -18,8 +18,9 @@ logging.basicConfig(level=logging.INFO, format='[%(asctime)s] %(levelname)s: %(m
 
 class PlexBaseApp(ABC):
     def __init__(self, server=None):
-        self.server = None # Initialize the server connection
-        self.libraries = []  # Initialize the libraries attribute
+        self.server = server  # Server connection (plexapi.server.PlexServer)
+        self.plex_account = None  # MyPlexAccount after authentication
+        self.libraries = []  # Cached libraries metadata
         
     @abstractmethod
     def create_plex_playlist(self, list_url, plex_playlist_name, library_name, callback=None):
@@ -56,15 +57,41 @@ class PlexBaseApp(ABC):
             resources = [resource for resource in plex_account.resources() if resource.owned and resource.connections and resource.provides == 'server']
             servers = [resource.name for resource in resources]
             if servers:
-                # Connect to the first server
-                self.server = plex_account.resource(servers[0]).connect()
-                # Fetch and store libraries after successfully connecting to the server
-                self.fetch_and_store_libraries()
-                # Successfully fetched servers and libraries, call the callback with success=True
+                # Store account for subsequent server selection
+                self.plex_account = plex_account
+                # Auto-connect only if there is a single server; otherwise wait for user selection
+                if len(servers) == 1:
+                    try:
+                        self.server = plex_account.resource(servers[0]).connect()
+                        self.fetch_and_store_libraries()
+                    except Exception as e:
+                        logging.error(f"Failed to auto-connect to Plex server '{servers[0]}': {e}")
+                        update_ui_callback(servers=servers, success=False)
+                        return
+                # Successfully fetched servers (and maybe libraries if auto-connected)
                 update_ui_callback(servers=servers, success=True)
+            else:
+                update_ui_callback(servers=[], success=False)
         else:
             # Failed to log in, call the callback with success=False
             update_ui_callback(servers=None, success=False)
+
+    def connect_to_server(self, server_name: str):
+        """Connect to the specified Plex server name and refresh libraries.
+
+        Returns True on success, False on failure.
+        """
+        if not self.plex_account:
+            logging.error("Cannot connect to server; Plex account not authenticated.")
+            return False
+        try:
+            self.server = self.plex_account.resource(server_name).connect()
+            self.fetch_and_store_libraries()
+            logging.info(f"Connected to Plex server '{server_name}' and loaded libraries.")
+            return True
+        except Exception as e:
+            logging.error(f"Failed to connect to Plex server '{server_name}': {e}")
+            return False
             
     def fetch_and_store_libraries(self):
         if self.server:

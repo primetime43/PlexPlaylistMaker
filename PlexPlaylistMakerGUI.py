@@ -405,9 +405,14 @@ class PlexPlaylistMakerGUI(ctk.CTk):
         if success:
             # Update the UI with the server list if login was successful.
             self.update_server_menus(servers)
-            filtered_libraries = [lib['name'] for lib in self.controller.libraries if lib['type'] in ('movie', 'show')]
-            self.update_library_dropdown(filtered_libraries, self.IMDB_frame)
-            self.update_library_dropdown(filtered_libraries, self.Letterboxd_frame)
+            if self.controller.server:  # Auto-connected (only one server)
+                filtered_libraries = [lib['name'] for lib in self.controller.libraries if lib['type'] in ('movie', 'show')]
+                self.update_library_dropdown(filtered_libraries, self.IMDB_frame)
+                self.update_library_dropdown(filtered_libraries, self.Letterboxd_frame)
+            else:
+                # Prompt user to pick a server to load libraries
+                self.update_library_dropdown(["Select a server"], self.IMDB_frame)
+                self.update_library_dropdown(["Select a server"], self.Letterboxd_frame)
         else:
             # Show an error message if login failed.
             CTkMessagebox.show_error("Login Failed", "Could not log in to Plex account.")
@@ -512,7 +517,8 @@ class PlexPlaylistMakerGUI(ctk.CTk):
         server_menu = ctk.CTkOptionMenu(
             frame,
             variable=variable,
-            values=servers
+            values=servers,
+            command=self.on_server_selected
         )
         server_menu.grid(row=row, column=column, padx=padx, pady=pady, sticky=sticky)
 
@@ -550,6 +556,26 @@ class PlexPlaylistMakerGUI(ctk.CTk):
             pady=10,
             sticky="w"
         )
+
+    def on_server_selected(self, selected_server: str):
+        """Handle user selecting a server from dropdown: connect & refresh libraries."""
+        if not selected_server or selected_server == "Loading servers...":
+            return
+        # Run connection in background to avoid blocking UI
+        threading.Thread(target=self._connect_and_refresh_libraries, args=(selected_server,), daemon=True).start()
+
+    def _connect_and_refresh_libraries(self, server_name: str):
+        # Show overlay while switching
+        self.after(0, self.show_overlay)
+        success = self.controller.connect_to_server(server_name)
+        if success:
+            self.server_connection = self.controller.server
+            filtered_libraries = [lib['name'] for lib in self.controller.libraries if lib['type'] in ('movie', 'show')]
+            self.after(0, self.update_library_dropdown, filtered_libraries, self.IMDB_frame)
+            self.after(0, self.update_library_dropdown, filtered_libraries, self.Letterboxd_frame)
+        else:
+            self.after(0, lambda: CTkMessagebox(title="Error", message=f"Failed to connect to server '{server_name}'.", icon="cancel", option_1="OK"))
+        self.after(0, self.hide_overlay)
 
     def start_playlist_creation(self, url, name, button):
         # Determine which frame is currently active and get the selected library from the correct dropdown
