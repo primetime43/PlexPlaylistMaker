@@ -15,6 +15,7 @@ import logging
 import difflib
 import unicodedata
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import List, Sequence
 
 # Configure a basic logger (prints to console). Users can customize or replace.
 logging.basicConfig(level=logging.INFO, format='[%(asctime)s] %(levelname)s: %(message)s')
@@ -35,24 +36,52 @@ class PlexBaseApp(ABC):
 
     @staticmethod
     def _canonical_forms(title: str):
-        """Return set of canonical forms for a title (lowercase, articles normalized, punctuation removed)."""
+        """Return set of canonical forms for a title (lowercase, articles normalized, punctuation removed).
+
+        Fixes malformed regex quoting and strips diacritics / punctuation.
+        """
         if not title:
             return set()
         t = title.lower().strip()
-        # Move trailing ", The" -> leading
         m = re.match(r'(.+),\s+(the|a|an)$', t)
         if m:
             t = f"{m.group(2)} {m.group(1)}"
         def basic(x: str):
             x = PlexBaseApp._strip_diacritics(x)
-            x = re.sub(r'[\u2019'"`]+", '', x)  # remove quote-like chars
-            x = re.sub(r'[^a-z0-9]+', ' ', x)  # non-alnum -> space
+            x = re.sub(r"[’'\"`]+", '', x)
+            x = re.sub(r'[^a-z0-9]+', ' ', x)
             x = re.sub(r'\s+', ' ', x).strip()
             return x
         base = basic(t)
-        forms = {base}
-        forms.add(re.sub(r'^(the|a|an)\s+', '', base))
+        forms = {base, re.sub(r'^(the|a|an)\s+', '', base)}
         return {f for f in forms if f}
+
+    def _match_titles_batched(self, library_name: str, titles: Sequence[str]) -> List[object]:
+        """Common batched matching logic used by subclasses."""
+        large_threshold = getattr(self, 'LARGE_LIST_THRESHOLD', 500)
+        batch_size = getattr(self, 'BATCH_MATCH_SIZE', 100)
+        matched_items = []
+        seen = set()
+        titles_list = list(titles)
+        if len(titles_list) >= large_threshold:
+            logging.info(f"Matching titles in batches of {batch_size} (total {len(titles_list)}).")
+            for i in range(0, len(titles_list), batch_size):
+                batch = titles_list[i:i+batch_size]
+                batch_matches = self.find_matched_items(library_name, batch)
+                added = 0
+                for item in batch_matches:
+                    if item.ratingKey not in seen:
+                        seen.add(item.ratingKey)
+                        matched_items.append(item)
+                        added += 1
+                logging.info(f"Matched batch {i//batch_size + 1}: {added} new items (cumulative {len(matched_items)}).")
+        else:
+            batch_matches = self.find_matched_items(library_name, titles_list)
+            for item in batch_matches:
+                if item.ratingKey not in seen:
+                    seen.add(item.ratingKey)
+                    matched_items.append(item)
+        return matched_items
 
     def _ensure_library_index(self, library_name: str, library):
         if library_name in self._title_index:
@@ -281,8 +310,12 @@ class PlexIMDbApp(PlexBaseApp):
             return [], list_title, "No IMDb IDs found in the provided URL.", []
 
     def create_plex_playlist(self, list_url, plex_playlist_name, library_name, callback=None):
+        callback = callback or (lambda *a, **k: None)
         if not list_url.strip():
             callback(False, "URL is empty. Please provide a valid URL.")
+            return
+        if not re.match(r'^https?://(www\.)?imdb\.com/list/[^/]+/?$', list_url.strip()):
+            callback(False, "Invalid IMDb list URL format.")
             return
         # Extended fetch returns (ids, title, message, id_title_pairs)
         imdb_ids, derived_title, message, id_title_pairs = self.fetch_imdb_list_data(list_url)
@@ -321,26 +354,7 @@ class PlexIMDbApp(PlexBaseApp):
         if not fetched_titles:
             callback(False, "Failed to obtain any titles from the IMDb list.")
             return
-
-        # Batch matching for large lists
-        matched_items = []
-        seen_rating_keys = set()
-        if len(fetched_titles) >= self.LARGE_LIST_THRESHOLD:
-            logging.info(f"Matching IMDb titles in batches of {self.BATCH_MATCH_SIZE} (total {len(fetched_titles)}).")
-            for i in range(0, len(fetched_titles), self.BATCH_MATCH_SIZE):
-                batch = fetched_titles[i:i+self.BATCH_MATCH_SIZE]
-                batch_matches = self.find_matched_items(library_name, batch)
-                added = 0
-                for item in batch_matches:
-                    if item.ratingKey not in seen_rating_keys:
-                        seen_rating_keys.add(item.ratingKey)
-                        matched_items.append(item)
-                        added += 1
-                logging.info(f"Matched batch {i//self.BATCH_MATCH_SIZE + 1}: {added} new items (cumulative {len(matched_items)}).")
-        else:
-            matched_items = self.find_matched_items(library_name, fetched_titles)
-            seen_rating_keys = {m.ratingKey for m in matched_items}
-
+        matched_items = self._match_titles_batched(library_name, fetched_titles)
         matched_count = len(matched_items)
         total_fetched = len(fetched_titles)
         unmatched_count = total_fetched - matched_count
@@ -409,8 +423,12 @@ class PlexLetterboxdApp(PlexBaseApp):
         
     # Maybe eventually use the offcial Letterboxd API instead of web scraping
     def create_plex_playlist(self, list_url, plex_playlist_name, library_name, callback=None):
+        callback = callback or (lambda *a, **k: None)
         if not list_url.strip():
             callback(False, "URL is empty. Please provide a valid URL.")
+            return
+        if not re.match(r'^https?://(www\.)?letterboxd\.com/[^/]+/list/[^/]+/?$', list_url.strip()):
+            callback(False, "Invalid Letterboxd list URL format.")
             return
 
         item_objects, derived_title, message = self.fetch_letterboxd_list_data(list_url)
@@ -463,25 +481,7 @@ class PlexLetterboxdApp(PlexBaseApp):
         if not movie_titles:
             callback(False, "Failed to obtain any titles from the Letterboxd list (all fetches failed).")
             return
-
-        # Batch matching for large lists to provide incremental logging
-        matched_items = []
-        seen_rating_keys = set()
-        if len(movie_titles) >= self.LARGE_LIST_THRESHOLD:
-            logging.info(f"Matching Letterboxd titles in batches of {self.BATCH_MATCH_SIZE} (total {len(movie_titles)}).")
-            for i in range(0, len(movie_titles), self.BATCH_MATCH_SIZE):
-                batch = movie_titles[i:i+self.BATCH_MATCH_SIZE]
-                batch_matches = self.find_matched_items(library_name, batch)
-                added = 0
-                for item in batch_matches:
-                    if item.ratingKey not in seen_rating_keys:
-                        seen_rating_keys.add(item.ratingKey)
-                        matched_items.append(item)
-                        added += 1
-                logging.info(f"Matched batch {i//self.BATCH_MATCH_SIZE + 1}: {added} new items (cumulative {len(matched_items)}).")
-        else:
-            matched_items = self.find_matched_items(library_name, movie_titles)
-            seen_rating_keys = {m.ratingKey for m in matched_items}
+        matched_items = self._match_titles_batched(library_name, movie_titles)
         requested_total = len(item_objects)
         fetched_count = len(movie_titles)
         failures_count = len(failures)
@@ -502,7 +502,6 @@ class PlexLetterboxdApp(PlexBaseApp):
                 parts.append(f"{failures_count} failed to fetch.")
             callback(True, " ".join(parts))
         else:
-            # None matched
             if fetched_count:
                 msg = (f"Fetched {fetched_count} title(s) but none matched Plex library.")
                 if failures_count:
@@ -513,7 +512,6 @@ class PlexLetterboxdApp(PlexBaseApp):
                 )
                 callback(False, msg)
             else:
-                # fetched_count == 0 already handled earlier, but just in case
                 callback(False, "No matching items found in Plex library.")
         
     def fetch_letterboxd_list_data(self, list_url):
@@ -736,27 +734,28 @@ class PlexLetterboxdApp(PlexBaseApp):
     
     
 def check_updates(version: str):
+    """Return title string with update notice using simple semantic comparison.
+
+    Avoids float parsing issues (e.g. 1.10 vs 1.2). Falls back gracefully on errors.
+    """
+    latest = version
     try:
-        # Fetch the latest release from GitHub API
-        response = requests.get(
-            "https://api.github.com/repos/primetime43/PlexPlaylistMaker/releases/latest"
-        )
-        data = response.json()
-
-        # Check if 'tag_name' is in the response
-        if 'tag_name' in data:
-            rep_version = data['tag_name'].strip('v')
-
-            try:
-                rep_version = float(rep_version)
-            except ValueError:
-                rep_version = version
-        else:
-            rep_version = version
-
+        response = requests.get("https://api.github.com/repos/primetime43/PlexPlaylistMaker/releases/latest", timeout=8)
+        if response.ok:
+            data = response.json()
+            tag = data.get('tag_name') or ''
+            tag = tag.lstrip('v')
+            if tag:
+                latest = tag
     except requests.exceptions.RequestException:
-        rep_version = version
+        pass
 
-    return (
-        f"PlexPlaylistMaker - {version}{' | NEW VERSION AVAILABLE' if version < rep_version else ''}"
-    )
+    def parse(v: str):
+        parts = re.findall(r'\d+', v)
+        nums = [int(p) for p in parts[:3]]
+        while len(nums) < 3:
+            nums.append(0)
+        return tuple(nums)
+
+    update_available = parse(latest) > parse(version)
+    return f"PlexPlaylistMaker - {version}{' | NEW VERSION AVAILABLE' if update_available else ''}"

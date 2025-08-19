@@ -63,7 +63,8 @@ Before you can use PlexPlaylistMaker, ensure you have the following:
 
 * Plex Media Server setup and accessible.
 * Python 3.6+ installed on your system.
-* Required Python packages: requests, plexapi, beautifulsoup4, imdbpy, json, threading, Pillow, customtkinter, and CTkMessagebox.
+* Required Python packages: `requests`, `plexapi`, `beautifulsoup4`, `imdbpy`, `Pillow`, `customtkinter`, `CTkMessagebox`.
+  (Standard library modules like `json`, `threading` are not listed as dependencies.)
 
 # Installation
 1. Clone or download the program from the repository.
