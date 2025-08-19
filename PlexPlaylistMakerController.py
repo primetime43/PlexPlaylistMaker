@@ -158,6 +158,66 @@ class PlexBaseApp(ABC):
                 seen.add(chosen.ratingKey)
                 results.append(chosen)
         return results
+
+    def match_titles_with_status(self, library_name: str, list_items: Sequence[str]):
+        """Return list of (raw_title, matched_item_or_None) preserving order.
+
+        This provides visibility into which requested titles were not found so the
+        GUI can export them. Uses same matching logic as `find_matched_items` but
+        does not deduplicate input titles (except that Plex items themselves are
+        reused) and preserves ordering of the provided list.
+        """
+        if self.server is None:
+            logging.warning("Server connection is not established.")
+            return []
+        try:
+            library = self.server.library.section(library_name)
+        except Exception as e:
+            logging.error(f"Unable to access library '{library_name}': {e}")
+            return []
+        self._ensure_library_index(library_name, library)
+        index = self._title_index.get(library_name, {})
+        pairs = []
+        for raw_title in list_items:
+            if not raw_title:
+                pairs.append((raw_title, None))
+                continue
+            wanted_forms = self._canonical_forms(raw_title)
+            chosen = None
+            # Exact canonical form
+            for form in wanted_forms:
+                if form in index:
+                    chosen = index[form][0]
+                    break
+            # Fuzzy
+            if not chosen and index:
+                target = next(iter(wanted_forms)) if wanted_forms else ''
+                candidates = index.keys()
+                if target and target[0].isalpha():
+                    subset = [c for c in candidates if c.startswith(target[0])]
+                    if subset:
+                        candidates = subset
+                best_form = None
+                best_ratio = 0.0
+                for cand in candidates:
+                    r = difflib.SequenceMatcher(None, target, cand).ratio()
+                    if r > best_ratio:
+                        best_ratio = r
+                        best_form = cand
+                if best_form and best_ratio >= self.FUZZY_THRESHOLD:
+                    chosen = index[best_form][0]
+            # Legacy search fallback
+            if not chosen:
+                try:
+                    plex_res = library.search(title=raw_title)
+                    for item in plex_res:
+                        if item.title.lower() == raw_title.lower() or (self._canonical_forms(item.title) & wanted_forms):
+                            chosen = item
+                            break
+                except Exception:
+                    pass
+            pairs.append((raw_title, chosen))
+        return pairs
     
     def login_and_fetch_servers(self, update_ui_callback):
         headers = {'X-Plex-Client-Identifier': 'unique_client_identifier'}
@@ -312,15 +372,15 @@ class PlexIMDbApp(PlexBaseApp):
     def create_plex_playlist(self, list_url, plex_playlist_name, library_name, callback=None):
         callback = callback or (lambda *a, **k: None)
         if not list_url.strip():
-            callback(False, "URL is empty. Please provide a valid URL.")
+            callback(False, "URL is empty. Please provide a valid URL.", [], plex_playlist_name)
             return
         if not re.match(r'^https?://(www\.)?imdb\.com/list/[^/]+/?$', list_url.strip()):
-            callback(False, "Invalid IMDb list URL format.")
+            callback(False, "Invalid IMDb list URL format.", [], plex_playlist_name)
             return
         # Extended fetch returns (ids, title, message, id_title_pairs)
         imdb_ids, derived_title, message, id_title_pairs = self.fetch_imdb_list_data(list_url)
         if not imdb_ids:
-            callback(False, message)
+            callback(False, message, [], plex_playlist_name)
             return
         if not plex_playlist_name.strip():
             if derived_title:
@@ -350,14 +410,44 @@ class PlexIMDbApp(PlexBaseApp):
                 callback(False, "No matching items found for given IMDb IDs.")
                 return
             fetched_titles = [title for _, title in imdb_list_items]
+            # Replace/augment id_title_pairs with fully fetched pairs to keep imdb_ids for export
+            id_title_pairs = imdb_list_items
 
         if not fetched_titles:
-            callback(False, "Failed to obtain any titles from the IMDb list.")
+            callback(False, "Failed to obtain any titles from the IMDb list.", [], plex_playlist_name, [])
             return
-        matched_items = self._match_titles_batched(library_name, fetched_titles)
+        # Build ordered detailed entries including position and id
+        # We must correlate titles back to ids; prefer id_title_pairs if available; else build from imdb_ids + fetched_titles order
+        id_to_title = {}
+        if id_title_pairs:
+            for imdb_id, title in id_title_pairs:
+                id_to_title.setdefault(imdb_id, title)
+        # If we fetched via API, rebuild from imdb_list_items structure (fetched_titles preserves order but we lost ids)
+        detailed_entries = []
+        if id_to_title:
+            # Preserve original imdb_ids order when possible
+            for pos, imdb_id in enumerate(imdb_ids, start=1):
+                title = id_to_title.get(imdb_id)
+                if title and title in fetched_titles:  # ensure we actually have that title resolved
+                    detailed_entries.append({'title': title, 'imdb_id': imdb_id, 'position': pos, 'imdb_url': f'https://www.imdb.com/title/{imdb_id}/'})
+        else:
+            # Fallback: create entries using fetched_titles sequentially (ids unknown)
+            for pos, title in enumerate(fetched_titles, start=1):
+                detailed_entries.append({'title': title, 'imdb_id': None, 'position': pos, 'imdb_url': None})
+
+        # Get per-title match status
+        pairs = self.match_titles_with_status(library_name, [e['title'] for e in detailed_entries])
+        matched_items = []
+        seen_keys = set()
+        for (_title, item) in pairs:
+            if item and item.ratingKey not in seen_keys:
+                seen_keys.add(item.ratingKey)
+                matched_items.append(item)
+        unmatched_titles = [t for t, item in pairs if not item]
+        unmatched_details = [e for e in detailed_entries if e['title'] in set(unmatched_titles)]
         matched_count = len(matched_items)
         total_fetched = len(fetched_titles)
-        unmatched_count = total_fetched - matched_count
+        unmatched_count = len(unmatched_titles)
         if matched_items:
             self.server.createPlaylist(plex_playlist_name, items=matched_items)
             logging.info(
@@ -369,9 +459,9 @@ class PlexIMDbApp(PlexBaseApp):
                 f"{unmatched_count} not found in Plex." if unmatched_count else
                 f"Created playlist '{plex_playlist_name}' with all {matched_count} items."
             )
-            callback(True, msg)
+            callback(True, msg, unmatched_titles, plex_playlist_name, unmatched_details)
         else:
-            callback(False, "None of the fetched items were found in the Plex library.")
+            callback(False, "None of the fetched items were found in the Plex library.", unmatched_titles, plex_playlist_name, unmatched_details)
 
             
 class PlexLetterboxdApp(PlexBaseApp):
@@ -425,15 +515,15 @@ class PlexLetterboxdApp(PlexBaseApp):
     def create_plex_playlist(self, list_url, plex_playlist_name, library_name, callback=None):
         callback = callback or (lambda *a, **k: None)
         if not list_url.strip():
-            callback(False, "URL is empty. Please provide a valid URL.")
+            callback(False, "URL is empty. Please provide a valid URL.", [], plex_playlist_name)
             return
         if not re.match(r'^https?://(www\.)?letterboxd\.com/[^/]+/list/[^/]+/?$', list_url.strip()):
-            callback(False, "Invalid Letterboxd list URL format.")
+            callback(False, "Invalid Letterboxd list URL format.", [], plex_playlist_name)
             return
 
         item_objects, derived_title, message = self.fetch_letterboxd_list_data(list_url)
         if not item_objects:
-            callback(False, message)
+            callback(False, message, [], plex_playlist_name)
             return
         # Auto-name if user left playlist name blank
         if not plex_playlist_name.strip():
@@ -479,14 +569,39 @@ class PlexLetterboxdApp(PlexBaseApp):
         movie_titles = deduped
 
         if not movie_titles:
-            callback(False, "Failed to obtain any titles from the Letterboxd list (all fetches failed).")
+            callback(False, "Failed to obtain any titles from the Letterboxd list (all fetches failed).", [], plex_playlist_name, [])
             return
-        matched_items = self._match_titles_batched(library_name, movie_titles)
+        # Prepare detailed entries (position + metadata from item_objects)
+        slug_to_item = {itm['slug']: itm for itm in item_objects if 'slug' in itm}
+        detailed_entries = []
+        # Reconstruct in original order of item_objects for positions
+        for pos, itm in enumerate(item_objects, start=1):
+            title_choice = itm.get('original_title') or itm.get('title')
+            if not title_choice:
+                continue
+            detailed_entries.append({
+                'title': title_choice,
+                'original_title': itm.get('original_title') or None,
+                'film_id': itm.get('film_id'),
+                'slug': itm.get('slug'),
+                'url': itm.get('fullURL'),
+                'position': pos
+            })
+        # Per-title match outcomes
+        pairs = self.match_titles_with_status(library_name, [e['title'] for e in detailed_entries])
+        matched_items = []
+        seen_keys = set()
+        for (_title, item) in pairs:
+            if item and item.ratingKey not in seen_keys:
+                seen_keys.add(item.ratingKey)
+                matched_items.append(item)
+        unmatched_titles = [t for t, item in pairs if not item]
+        unmatched_details = [e for e in detailed_entries if e['title'] in set(unmatched_titles)]
         requested_total = len(item_objects)
         fetched_count = len(movie_titles)
         failures_count = len(failures)
         matched_count = len(matched_items)
-        unmatched_fetched = fetched_count - matched_count
+        unmatched_fetched = len(unmatched_titles)
 
         if matched_items:
             self.server.createPlaylist(plex_playlist_name, items=matched_items)
@@ -500,7 +615,7 @@ class PlexLetterboxdApp(PlexBaseApp):
                 parts.append(f"{unmatched_fetched} fetched but not in Plex.")
             if failures_count:
                 parts.append(f"{failures_count} failed to fetch.")
-            callback(True, " ".join(parts))
+            callback(True, " ".join(parts), unmatched_titles, plex_playlist_name, unmatched_details)
         else:
             if fetched_count:
                 msg = (f"Fetched {fetched_count} title(s) but none matched Plex library.")
@@ -510,9 +625,9 @@ class PlexLetterboxdApp(PlexBaseApp):
                     "Playlist creation aborted (Letterboxd): name='%s' requested=%d fetched=%d matched=0 fetch_failures=%d" % (
                         plex_playlist_name, requested_total, fetched_count, failures_count)
                 )
-                callback(False, msg)
+                callback(False, msg, unmatched_titles, plex_playlist_name, unmatched_details)
             else:
-                callback(False, "No matching items found in Plex library.")
+                callback(False, "No matching items found in Plex library.", unmatched_titles, plex_playlist_name, unmatched_details)
         
     def fetch_letterboxd_list_data(self, list_url):
         """
