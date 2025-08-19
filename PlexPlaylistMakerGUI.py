@@ -622,13 +622,16 @@ class PlexPlaylistMakerGUI(ctk.CTk):
                 writer.writerow(base_headers + extra_headers)
                 # Build a lookup by title to its detail entry (choose first occurrence)
                 detail_map = {}
+                # Also build map by imdb_id if available to ensure uniqueness
                 for d in details:
-                    detail_map.setdefault(d.get('title'), d)
+                    title_key = d.get('title')
+                    if title_key and title_key not in detail_map:
+                        detail_map[title_key] = d
                 for t in titles:
                     d = detail_map.get(t, {})
                     row = [d.get('position') or '', t]
                     if 'imdb_id' in d:
-                        row.extend([d.get('imdb_id') or '', d.get('imdb_url') or ''])
+                        row.extend([d.get('imdb_id') or '', d.get('imdb_url') or '' ])
                     if 'original_title' in d:
                         row.append(d.get('original_title') or '')
                     if 'film_id' in d:

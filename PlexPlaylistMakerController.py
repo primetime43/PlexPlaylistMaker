@@ -410,6 +410,8 @@ class PlexIMDbApp(PlexBaseApp):
                 callback(False, "No matching items found for given IMDb IDs.")
                 return
             fetched_titles = [title for _, title in imdb_list_items]
+            # Replace/augment id_title_pairs with fully fetched pairs to keep imdb_ids for export
+            id_title_pairs = imdb_list_items
 
         if not fetched_titles:
             callback(False, "Failed to obtain any titles from the IMDb list.", [], plex_playlist_name, [])
