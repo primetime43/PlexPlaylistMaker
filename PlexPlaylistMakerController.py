@@ -14,6 +14,7 @@ import random
 import logging
 import difflib
 import unicodedata
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # Configure a basic logger (prints to console). Users can customize or replace.
 logging.basicConfig(level=logging.INFO, format='[%(asctime)s] %(levelname)s: %(message)s')
@@ -185,9 +186,12 @@ class PlexBaseApp(ABC):
             # Storing more detailed information in a list of dictionaries:
             self.libraries = [{'name': library.title, 'type': library.type, 'uuid': library.uuid} for library in libraries]
  
-class PlexIMDbApp(PlexBaseApp):   
+class PlexIMDbApp(PlexBaseApp):
     def __init__(self, server=None):
         super().__init__(server=server)
+        # Batch / performance tuning knobs
+        self.LARGE_LIST_THRESHOLD = 500   # Threshold to enable incremental batch logging
+        self.BATCH_MATCH_SIZE = 100       # Matching batch size for large lists
         
     def fetch_item_details(self, queue, ia, imdb_id, retry_count=3, delay=1):
         attempts = 0
@@ -216,13 +220,13 @@ class PlexIMDbApp(PlexBaseApp):
             response = requests.get(imdb_list_url, headers=headers, timeout=10)
             response.raise_for_status()
         except requests.exceptions.HTTPError:
-            return [], None, "HTTP error occurred. Please check the URL."
+            return [], None, "HTTP error occurred. Please check the URL.", []
         except requests.exceptions.ConnectionError:
-            return [], None, "Connection error occurred. Please check your internet connection."
+            return [], None, "Connection error occurred. Please check your internet connection.", []
         except requests.exceptions.Timeout:
-            return [], None, "Timeout error occurred. The request took too long to complete."
+            return [], None, "Timeout error occurred. The request took too long to complete.", []
         except requests.exceptions.RequestException:
-            return [], None, "An error occurred. Please try again."
+            return [], None, "An error occurred. Please try again.", []
 
         soup = BeautifulSoup(response.text, 'html.parser')
         # Attempt to extract a list title from typical IMDb list structures
@@ -240,25 +244,48 @@ class PlexIMDbApp(PlexBaseApp):
                 list_title = slug.replace('-', ' ').title()
         
         imdb_ids = []
-        for a_tag in soup.find_all('a', href=True):
-            href = a_tag['href']
-            imdb_id_match = re.search(r'/title/(tt\d+)/', href)
-            if imdb_id_match:
-                imdb_ids.append(imdb_id_match.group(1))
-        
-        if imdb_ids:
-            return imdb_ids, list_title, "Data fetched successfully."
-        else:
-            return [], list_title, "No IMDb IDs found in the provided URL."
+        id_title_pairs = []  # (imdb_id, title)
 
-        return [], list_title, "Failed to fetch data. Please check the URL format and try again."
+        # Primary structured parse: div.lister-item
+        lister_items = soup.find_all('div', class_=re.compile(r'lister-item.*'))
+        if lister_items:
+            for div in lister_items:
+                a = div.find('a', href=True)
+                if not a:
+                    continue
+                href = a['href']
+                imdb_id_match = re.search(r'/title/(tt\d+)/', href)
+                if imdb_id_match:
+                    imdb_id = imdb_id_match.group(1)
+                    title_text = a.get_text(strip=True)
+                    if imdb_id not in imdb_ids:
+                        imdb_ids.append(imdb_id)
+                        if title_text:
+                            id_title_pairs.append((imdb_id, title_text))
+        else:
+            # Fallback generic anchor scan
+            for a_tag in soup.find_all('a', href=True):
+                href = a_tag['href']
+                imdb_id_match = re.search(r'/title/(tt\d+)/', href)
+                if imdb_id_match:
+                    imdb_id = imdb_id_match.group(1)
+                    if imdb_id not in imdb_ids:
+                        imdb_ids.append(imdb_id)
+                        title_text = a_tag.get_text(strip=True)
+                        if title_text:
+                            id_title_pairs.append((imdb_id, title_text))
+
+        if imdb_ids:
+            return imdb_ids, list_title, "Data fetched successfully.", id_title_pairs
+        else:
+            return [], list_title, "No IMDb IDs found in the provided URL.", []
 
     def create_plex_playlist(self, list_url, plex_playlist_name, library_name, callback=None):
         if not list_url.strip():
             callback(False, "URL is empty. Please provide a valid URL.")
             return
-        
-        imdb_ids, derived_title, message = self.fetch_imdb_list_data(list_url)
+        # Extended fetch returns (ids, title, message, id_title_pairs)
+        imdb_ids, derived_title, message, id_title_pairs = self.fetch_imdb_list_data(list_url)
         if not imdb_ids:
             callback(False, message)
             return
@@ -268,29 +295,52 @@ class PlexIMDbApp(PlexBaseApp):
             else:
                 slug = list_url.rstrip('/').split('/')[-1]
                 plex_playlist_name = slug.replace('-', ' ').title() if slug else 'IMDb List'
+        # Decide whether to skip per-item fetches based on how many titles we already parsed
+        fetched_titles = []
+        if id_title_pairs and len(id_title_pairs) >= int(0.8 * len(imdb_ids)):
+            fetched_titles = [t for _, t in id_title_pairs]
+            logging.info(f"IMDb list: parsed {len(fetched_titles)} titles directly from list page (total IDs={len(imdb_ids)}). Skipping individual title fetch requests.")
+        else:
+            ia = imdb.Cinemagoer()
+            threads = []
+            queue = Queue()
+            for imdb_id in imdb_ids:
+                thread = Thread(target=self.fetch_item_details, args=(queue, ia, imdb_id))
+                threads.append(thread)
+                thread.start()
+            for thread in threads:
+                thread.join()
+            imdb_list_items = []
+            while not queue.empty():
+                imdb_list_items.append(queue.get())
+            if not imdb_list_items:
+                callback(False, "No matching items found for given IMDb IDs.")
+                return
+            fetched_titles = [title for _, title in imdb_list_items]
 
-        ia = imdb.Cinemagoer()
-        # Prepare for multithreading
-        threads = []
-        queue = Queue()
-        for imdb_id in imdb_ids:
-            thread = Thread(target=self.fetch_item_details, args=(queue, ia, imdb_id))
-            threads.append(thread)
-            thread.start()
-
-        for thread in threads:
-            thread.join()
-
-        imdb_list_items = []
-        while not queue.empty():
-            imdb_list_items.append(queue.get())
-
-        if not imdb_list_items:
-            callback(False, "No matching items found for given IMDb IDs.")
+        if not fetched_titles:
+            callback(False, "Failed to obtain any titles from the IMDb list.")
             return
 
-        fetched_titles = [title for _, title in imdb_list_items]
-        matched_items = self.find_matched_items(library_name, fetched_titles)
+        # Batch matching for large lists
+        matched_items = []
+        seen_rating_keys = set()
+        if len(fetched_titles) >= self.LARGE_LIST_THRESHOLD:
+            logging.info(f"Matching IMDb titles in batches of {self.BATCH_MATCH_SIZE} (total {len(fetched_titles)}).")
+            for i in range(0, len(fetched_titles), self.BATCH_MATCH_SIZE):
+                batch = fetched_titles[i:i+self.BATCH_MATCH_SIZE]
+                batch_matches = self.find_matched_items(library_name, batch)
+                added = 0
+                for item in batch_matches:
+                    if item.ratingKey not in seen_rating_keys:
+                        seen_rating_keys.add(item.ratingKey)
+                        matched_items.append(item)
+                        added += 1
+                logging.info(f"Matched batch {i//self.BATCH_MATCH_SIZE + 1}: {added} new items (cumulative {len(matched_items)}).")
+        else:
+            matched_items = self.find_matched_items(library_name, fetched_titles)
+            seen_rating_keys = {m.ratingKey for m in matched_items}
+
         matched_count = len(matched_items)
         total_fetched = len(fetched_titles)
         unmatched_count = total_fetched - matched_count
@@ -330,6 +380,15 @@ class PlexLetterboxdApp(PlexBaseApp):
             'Connection': 'keep-alive'
         }
         self._last_request_time = 0.0
+        # Batch thresholds
+        self.LARGE_LIST_THRESHOLD = 500
+        self.BATCH_MATCH_SIZE = 100
+        # Concurrency tuning (for missing-detail fetches only)
+        self.MAX_CONCURRENT_FETCHES = 6   # Reasonable small number to avoid hammering
+        self.MISSING_FETCH_JITTER = (0.15, 0.55)
+        self.MISSING_RETRY = 3
+        # Pagination safety cap
+        self.MAX_LIST_PAGES = 30
 
     @staticmethod
     def _derive_slug_title(list_url: str) -> str:
@@ -366,32 +425,65 @@ class PlexLetterboxdApp(PlexBaseApp):
                 slug = list_url.rstrip('/').split('/')[-1]
                 plex_playlist_name = slug.replace('-', ' ').title() if slug else 'Letterboxd List'
 
-        # Sequential polite fetching to avoid triggering aggressive rate limits.
-        movie_details_list = []
-        failures = []
-        for idx, item in enumerate(item_objects, start=1):
-            slug_url = item['fullURL']
-            details = self.fetch_movie_details_from_slug_with_retry(slug_url)
-            if details:
-                movie_details_list.append(details)
-                logging.info(f"[{idx}/{len(item_objects)}] Acquired: {details['original_title']}")
-            else:
-                failures.append(slug_url)
+        # Attempt enhanced zero / low additional request extraction.
+        # 1. Collect titles we already have
+        for item in item_objects:
+            # Normalize if only title present without original_title
+            if item.get('title') and not item.get('original_title'):
+                item['original_title'] = item['title']
 
-        if not movie_details_list:
-            # If all failed, surface richer error context
-            if failures:
-                callback(False, (
-                    f"Failed to fetch any film data. Total attempts: {len(failures)}. "
-                    f"Rate limiting may have blocked requests. Try again later or reduce list size."))
-            else:
-                callback(False, "No movies found or parsed from the provided URL.")
+        pre_parsed_titles = [item['original_title'] for item in item_objects if item.get('original_title')]
+
+        # 2. Determine which still lack titles
+        missing = [item for item in item_objects if not item.get('original_title')]
+
+        failures = []
+        movie_titles = pre_parsed_titles.copy()
+
+        if missing:
+            logging.info(f"Letterboxd: {len(pre_parsed_titles)}/{len(item_objects)} titles from list page; fetching {len(missing)} missing concurrently.")
+            fetched_missing = self._fetch_missing_titles_concurrently(missing)
+            for slug_url, title in fetched_missing['success']:
+                movie_titles.append(title)
+            failures.extend(fetched_missing['fail'])
+            if fetched_missing['fail']:
+                logging.info(f"Letterboxd: {len(fetched_missing['fail'])} film page fetches failed (will continue with available titles).")
+        else:
+            logging.info(f"Letterboxd: all {len(pre_parsed_titles)} titles parsed from list page; no per-film fetches needed.")
+
+        # Deduplicate while preserving order
+        seen_titles = set()
+        deduped = []
+        for t in movie_titles:
+            if t and t not in seen_titles:
+                seen_titles.add(t)
+                deduped.append(t)
+        movie_titles = deduped
+
+        if not movie_titles:
+            callback(False, "Failed to obtain any titles from the Letterboxd list (all fetches failed).")
             return
 
-        movie_titles = [details['original_title'] for details in movie_details_list]
-        matched_items = self.find_matched_items(library_name, movie_titles)
+        # Batch matching for large lists to provide incremental logging
+        matched_items = []
+        seen_rating_keys = set()
+        if len(movie_titles) >= self.LARGE_LIST_THRESHOLD:
+            logging.info(f"Matching Letterboxd titles in batches of {self.BATCH_MATCH_SIZE} (total {len(movie_titles)}).")
+            for i in range(0, len(movie_titles), self.BATCH_MATCH_SIZE):
+                batch = movie_titles[i:i+self.BATCH_MATCH_SIZE]
+                batch_matches = self.find_matched_items(library_name, batch)
+                added = 0
+                for item in batch_matches:
+                    if item.ratingKey not in seen_rating_keys:
+                        seen_rating_keys.add(item.ratingKey)
+                        matched_items.append(item)
+                        added += 1
+                logging.info(f"Matched batch {i//self.BATCH_MATCH_SIZE + 1}: {added} new items (cumulative {len(matched_items)}).")
+        else:
+            matched_items = self.find_matched_items(library_name, movie_titles)
+            seen_rating_keys = {m.ratingKey for m in matched_items}
         requested_total = len(item_objects)
-        fetched_count = len(movie_details_list)
+        fetched_count = len(movie_titles)
         failures_count = len(failures)
         matched_count = len(matched_items)
         unmatched_fetched = fetched_count - matched_count
@@ -431,42 +523,105 @@ class PlexLetterboxdApp(PlexBaseApp):
         :param list_url: URL of the Letterboxd list
         :return: (movies_data, list_title, message)
         """
-        try:
-            # Include headers & session reuse for list page too
-            response = self.SESSION.get(list_url, headers=self.DEFAULT_HEADERS, timeout=15)
-            response.raise_for_status()
-        except requests.exceptions.HTTPError:
-            return [], None, "HTTP error occurred. Please check the URL."
-        except requests.exceptions.ConnectionError:
-            return [], None, "Connection error occurred. Please check your internet connection."
-        except requests.exceptions.Timeout:
-            return [], None, "Timeout error occurred. The request took too long to complete."
-        except requests.exceptions.RequestException:
-            return [], None, "An error occurred. Please try again."
-    
+        # Normalize base list URL (strip any /page/<n>/ suffix)
+        base_url = re.sub(r'/page/\d+/?$', '/', list_url.rstrip('/'))
+        if not base_url.endswith('/'):
+            base_url += '/'
+
         movies_data = []
-        soup = BeautifulSoup(response.text, 'html.parser')
-        list_title = self._derive_slug_title(list_url)
-        logging.debug(f"Letterboxd slug title='{list_title}' from URL '{list_url}'")
+        list_title = self._derive_slug_title(base_url)
+        fetched_pages = 0
+        max_pages_detected = None
 
-        poster_divs = soup.find_all('div', class_='film-poster')
-        if not poster_divs:
-            return [], list_title, "No movies found in the provided URL."
+        def fetch_page(url):
+            try:
+                resp = self.SESSION.get(url, headers=self.DEFAULT_HEADERS, timeout=15)
+                resp.raise_for_status()
+                return resp.text, None
+            except requests.exceptions.HTTPError:
+                return None, "HTTP error occurred."
+            except requests.exceptions.ConnectionError:
+                return None, "Connection error occurred."
+            except requests.exceptions.Timeout:
+                return None, "Timeout error occurred."
+            except requests.exceptions.RequestException:
+                return None, "Request error occurred."
 
-        for poster_div in poster_divs:
-            movie_slug = poster_div.get('data-film-slug')
-            film_id = poster_div.get('data-film-id')
-            if movie_slug and film_id:
-                movies_data.append({
-                    'slug': movie_slug.strip(),
-                    'film_id': film_id.strip(),
-                    'fullURL': f'https://letterboxd.com/film/{movie_slug.strip()}'
-                })
+        page_index = 1
+        while True:
+            if page_index == 1:
+                page_url = base_url
+            else:
+                page_url = f"{base_url}page/{page_index}/"
+            html, err = fetch_page(page_url)
+            if not html:
+                if page_index == 1 and err:
+                    return [], None, err
+                break  # stop on first missing subsequent page
+            soup = BeautifulSoup(html, 'html.parser')
+            poster_divs = soup.find_all('div', class_='film-poster')
+            if not poster_divs:
+                # No more items
+                break
+            for poster_div in poster_divs:
+                movie_slug = poster_div.get('data-film-slug')
+                film_id = poster_div.get('data-film-id')
+                film_name = poster_div.get('data-film-name')
+                original_title = poster_div.get('data-original-title') or film_name
+                if (not film_name or not original_title):
+                    img = poster_div.find('img')
+                    if img and img.get('alt'):
+                        alt_title = re.sub(r'\s*\(\d{4}\)$', '', img['alt']).strip()
+                        if alt_title:
+                            original_title = original_title or alt_title
+                            film_name = film_name or alt_title
+                if movie_slug and film_id:
+                    entry = {
+                        'slug': movie_slug.strip(),
+                        'film_id': film_id.strip(),
+                        'fullURL': f'https://letterboxd.com/film/{movie_slug.strip()}'
+                    }
+                    if film_name:
+                        entry['title'] = film_name.strip()
+                    if original_title:
+                        entry['original_title'] = original_title.strip()
+                    movies_data.append(entry)
+            fetched_pages += 1
+            # Attempt to detect total pages (only once) if not already known
+            if max_pages_detected is None:
+                page_nums = []
+                for a in soup.find_all('a', href=True):
+                    m = re.search(r'/page/(\d+)/', a['href'])
+                    if m:
+                        try:
+                            page_nums.append(int(m.group(1)))
+                        except ValueError:
+                            pass
+                if page_nums:
+                    max_pages_detected = max(page_nums)
+            # Decide whether to continue
+            if max_pages_detected and page_index >= max_pages_detected:
+                break
+            if fetched_pages >= self.MAX_LIST_PAGES:
+                logging.info(f"Letterboxd pagination cap reached ({self.MAX_LIST_PAGES} pages).")
+                break
+            page_index += 1
+
+        # Deduplicate by slug
+        unique = {}
+        ordered = []
+        for item in movies_data:
+            slug = item['slug']
+            if slug not in unique:
+                unique[slug] = True
+                ordered.append(item)
+        movies_data = ordered
 
         if movies_data:
+            if fetched_pages > 1:
+                logging.info(f"Letterboxd: aggregated {len(movies_data)} items across {fetched_pages} page(s).")
             return movies_data, list_title, "Data fetched successfully."
-        else:
-            return [], list_title, "Failed to parse movie data. Please check the URL format and try again."
+        return [], list_title, "No movies found in the provided URL."
     
     def fetch_movie_details_from_slug_with_retry(self, slug_url):
         """Fetch movie original title from a Letterboxd film page with robust retry & backoff.
@@ -527,6 +682,57 @@ class PlexLetterboxdApp(PlexBaseApp):
                 return None
         logging.error(f"Failed to fetch details for {slug_url} after {self.MAX_RETRIES} attempts.")
         return None
+
+    # ---------------- Concurrency helper for missing titles -----------------
+    def _fetch_missing_titles_concurrently(self, missing_items):
+        """Fetch original titles concurrently for items lacking title info.
+
+        Returns dict {'success': [(url,title),...], 'fail': [url,...]}.
+        Concurrency kept modest; each worker jitter-sleeps before request.
+        """
+        results_success = []
+        results_fail = []
+
+        def worker(item):
+            slug_url = item['fullURL']
+            # light jitter to avoid burst
+            time.sleep(random.uniform(*self.MISSING_FETCH_JITTER))
+            headers = self.DEFAULT_HEADERS.copy()
+            for attempt in range(1, self.MISSING_RETRY + 1):
+                try:
+                    resp = requests.get(slug_url, headers=headers, timeout=10)
+                    if resp.status_code == 200:
+                        soup = BeautifulSoup(resp.text, 'html.parser')
+                        og = soup.find('meta', property='og:title')
+                        if og and og.get('content'):
+                            title = re.sub(r'\s*\(\d{4}\)$', '', og['content']).strip()
+                            if title:
+                                return (slug_url, title)
+                        return None
+                    elif resp.status_code in (429, 503):
+                        # exponential backoff with jitter
+                        time.sleep((0.6 * (2 ** (attempt - 1))) + random.uniform(0.05, 0.25))
+                        continue
+                    else:
+                        return None
+                except Exception:
+                    time.sleep(0.4 * attempt + random.uniform(0.05, 0.25))
+            return None
+
+        with ThreadPoolExecutor(max_workers=self.MAX_CONCURRENT_FETCHES) as ex:
+            future_map = {ex.submit(worker, item): item for item in missing_items}
+            for future in as_completed(future_map):
+                item = future_map[future]
+                slug_url = item['fullURL']
+                try:
+                    res = future.result()
+                except Exception:
+                    res = None
+                if res:
+                    results_success.append(res)
+                else:
+                    results_fail.append(slug_url)
+        return {'success': results_success, 'fail': results_fail}
     
     
 def check_updates(version: str):
