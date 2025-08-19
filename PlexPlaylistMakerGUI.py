@@ -109,6 +109,10 @@ class PlexPlaylistMakerGUI(ctk.CTk):
                                                              self.IMDB_playlist_name_textbox.get(),
                                                              self.imdb_create_playlist_button))
         self.imdb_create_playlist_button.grid(row=6, column=0, padx=10, pady=10, sticky="w")
+        self.imdb_export_missing_button = ctk.CTkButton(self.IMDB_frame, text="Export Missing",
+                            state=ctk.DISABLED,
+                            command=lambda: self.export_missing_titles(self.IMDB_frame))
+        self.imdb_export_missing_button.grid(row=7, column=0, padx=10, pady=(0,10), sticky="w")
 
         # --- Letterboxd frame ---
         self.Letterboxd_frame = ctk.CTkFrame(self, corner_radius=0, fg_color="transparent")
@@ -130,6 +134,10 @@ class PlexPlaylistMakerGUI(ctk.CTk):
                                                                    self.Letterboxd_playlist_name_textbox.get(),
                                                                    self.letterboxd_create_playlist_button))
         self.letterboxd_create_playlist_button.grid(row=6, column=0, padx=10, pady=10, sticky="w")
+        self.letterboxd_export_missing_button = ctk.CTkButton(self.Letterboxd_frame, text="Export Missing",
+                                  state=ctk.DISABLED,
+                                  command=lambda: self.export_missing_titles(self.Letterboxd_frame))
+        self.letterboxd_export_missing_button.grid(row=7, column=0, padx=10, pady=(0,10), sticky="w")
 
         self.current_frame = "imdb_frame"
 
@@ -304,6 +312,10 @@ class PlexPlaylistMakerGUI(ctk.CTk):
         threading.Thread(target=fetch_servers).start()
     
     def server_login_callback(self, servers, success):
+        # Ensure UI updates run on main thread (controller invokes callback from worker thread)
+        if threading.current_thread() is not threading.main_thread():
+            self.after(0, lambda: self.server_login_callback(servers, success))
+            return
         # Re-enable the IMDb and Letterboxd buttons after server fetch completes.
         self.IMDB.configure(state=ctk.NORMAL)
         self.Letterboxd.configure(state=ctk.NORMAL)
@@ -386,7 +398,11 @@ class PlexPlaylistMakerGUI(ctk.CTk):
     def update_library_dropdown(self, libraries, target_frame):
         """Recreate the library dropdown for the given frame."""
         if hasattr(target_frame, 'library_menu') and target_frame.library_menu:
-            target_frame.library_menu.destroy()
+            try:
+                target_frame.library_menu.destroy()
+            except Exception:
+                # Widget may already be destroyed due to rapid updates; ignore
+                pass
 
         lib_var = tk.StringVar(self)
         menu = ctk.CTkOptionMenu(target_frame,
@@ -506,18 +522,26 @@ class PlexPlaylistMakerGUI(ctk.CTk):
         # Determine which frame is currently active and get the selected library from the correct dropdown
         if self.current_frame == "imdb_frame":
             selected_library = self.IMDB_frame.library_var.get()
+            creation_frame = self.IMDB_frame
         elif self.current_frame == "letterboxd_frame":
             selected_library = self.Letterboxd_frame.library_var.get()
+            creation_frame = self.Letterboxd_frame
         else:
             CTkMessagebox(title="Error", message="Error: No active frame identified.", icon="cancel", option_1="OK")
             return
+        # Clear previous unmatched titles for that frame and disable export until finished
+        creation_frame.unmatched_titles = []
+        if creation_frame is self.IMDB_frame and hasattr(self, 'imdb_export_missing_button'):
+            self.imdb_export_missing_button.configure(state=ctk.DISABLED)
+        if creation_frame is self.Letterboxd_frame and hasattr(self, 'letterboxd_export_missing_button'):
+            self.letterboxd_export_missing_button.configure(state=ctk.DISABLED)
         
         def run():
             # Update button text to indicate process start and disable it
             self.after(0, lambda: self.update_button_text_dynamically("Creating Playlist", button, disable=True))
             
             # Call the create playlist method with the selected library
-            self.controller.create_plex_playlist(url, name, selected_library, lambda success, message: self.after(0, self.playlist_creation_callback, success, message, button))
+            self.controller.create_plex_playlist(url, name, selected_library, lambda success, message, unmatched, playlist_name, unmatched_details: self.after(0, self.playlist_creation_callback, success, message, unmatched, playlist_name, unmatched_details, button, creation_frame))
         
         threading.Thread(target=run).start()
 
@@ -549,7 +573,7 @@ class PlexPlaylistMakerGUI(ctk.CTk):
             button.configure(text=base_text, state=ctk.NORMAL)  # Re-enable the button
 
     # Callback method to be called once playlist creation is done
-    def playlist_creation_callback(self, success, message, button):
+    def playlist_creation_callback(self, success, message, unmatched_titles, playlist_name, unmatched_details, button, creation_frame):
         # Stop any ongoing text animation and reset the button text and state
         self.update_button_text_dynamically("Create Playlist", button, disable=False)
         
@@ -558,6 +582,61 @@ class PlexPlaylistMakerGUI(ctk.CTk):
             CTkMessagebox(title="Success", message=message, icon="check", option_1="OK")
         else:
             CTkMessagebox(title="Error", message=message, icon="cancel", option_1="OK")
+        # Store unmatched titles on the creation frame (not necessarily current frame if user switched)
+        creation_frame.unmatched_titles = unmatched_titles or []
+        creation_frame.unmatched_details = unmatched_details or []
+        creation_frame.last_playlist_name = playlist_name
+        # Enable/disable export buttons accordingly
+        if hasattr(self, 'imdb_export_missing_button'):
+            self.imdb_export_missing_button.configure(state=ctk.NORMAL if getattr(self.IMDB_frame, 'unmatched_titles', []) else ctk.DISABLED)
+        if hasattr(self, 'letterboxd_export_missing_button'):
+            self.letterboxd_export_missing_button.configure(state=ctk.NORMAL if getattr(self.Letterboxd_frame, 'unmatched_titles', []) else ctk.DISABLED)
+
+    def export_missing_titles(self, frame):
+        titles = getattr(frame, 'unmatched_titles', [])
+        details = getattr(frame, 'unmatched_details', [])
+        if not titles:
+            CTkMessagebox(title="Info", message="No missing titles to export.", icon="info", option_1="OK")
+            return
+        try:
+            import datetime
+            timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
+            base_name = getattr(frame, 'last_playlist_name', 'playlist').strip() or 'playlist'
+            safe_base = re.sub(r'[^A-Za-z0-9_-]+', '_', base_name)[:40]
+            # Simple CSV export (no Excel dependency)
+            import csv
+            filename = f"Missing_{safe_base}_{timestamp}.csv"
+            with open(filename, 'w', newline='', encoding='utf-8') as f:
+                writer = csv.writer(f)
+                # Determine columns dynamically based on first detail record
+                base_headers = ['Position', 'Title']
+                extra_headers = []
+                if details:
+                    sample = details[0]
+                    if 'imdb_id' in sample:
+                        extra_headers.extend(['IMDb ID', 'IMDb URL'])
+                    if 'original_title' in sample:
+                        extra_headers.append('Original Title')
+                    if 'film_id' in sample:
+                        extra_headers.extend(['Film ID', 'Letterboxd URL', 'Slug'])
+                writer.writerow(base_headers + extra_headers)
+                # Build a lookup by title to its detail entry (choose first occurrence)
+                detail_map = {}
+                for d in details:
+                    detail_map.setdefault(d.get('title'), d)
+                for t in titles:
+                    d = detail_map.get(t, {})
+                    row = [d.get('position') or '', t]
+                    if 'imdb_id' in d:
+                        row.extend([d.get('imdb_id') or '', d.get('imdb_url') or ''])
+                    if 'original_title' in d:
+                        row.append(d.get('original_title') or '')
+                    if 'film_id' in d:
+                        row.extend([d.get('film_id') or '', d.get('url') or '', d.get('slug') or ''])
+                    writer.writerow(row)
+            CTkMessagebox(title="Exported", message=f"Missing titles exported to {filename}", icon="check", option_1="OK")
+        except Exception as e:
+            CTkMessagebox(title="Error", message=f"Failed to export: {e}", icon="cancel", option_1="OK")
 
     def toggle_connection_error_logging(self, event=None):
         """Keyboard shortcut to flip suppression of noisy connection errors (Ctrl+L)."""
