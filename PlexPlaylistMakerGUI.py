@@ -90,16 +90,18 @@ class PlexPlaylistMakerGUI(ctk.CTk):
 
         # --- IMDb frame ---
         self.IMDB_frame = ctk.CTkFrame(self, corner_radius=0, fg_color="transparent")
-        self.IMDB_frame.library_var = tk.StringVar(self)
+        # Dedicated IMDb library variable
+        self.imdb_library_var = tk.StringVar(self)
+        self.IMDB_frame.library_var = self.imdb_library_var
         self.IMDB_playlist_url_textbox = ctk.CTkEntry(self.IMDB_frame, placeholder_text="IMDb List URL", width=200)
         self.IMDB_playlist_url_textbox.grid(row=0, column=0, padx=10, pady=10, sticky="w")
         self.IMDB_playlist_name_textbox = ctk.CTkEntry(self.IMDB_frame, placeholder_text="Leave blank for auto-title", width=200)
         self.IMDB_playlist_name_textbox.grid(row=1, column=0, padx=10, pady=10, sticky="w")
         self.IMDB_server_menu = ctk.CTkOptionMenu(self.IMDB_frame, variable=self.server_var, values=["Loading servers..."])
         self.IMDB_server_menu.grid(row=2, column=0, padx=10, pady=10, sticky="w")
-        self.library_var = tk.StringVar(self)
-        self.library_menu = ctk.CTkOptionMenu(self.IMDB_frame, variable=self.library_var, values=["Loading libraries..."])
-        self.library_menu.grid(row=3, column=0, padx=10, pady=10, sticky="w")
+        self.imdb_library_menu = ctk.CTkOptionMenu(self.IMDB_frame, variable=self.imdb_library_var, values=["Loading libraries..."])
+        self.imdb_library_menu.grid(row=3, column=0, padx=10, pady=10, sticky="w")
+        self.IMDB_frame.library_menu = self.imdb_library_menu
         self.imdb_create_playlist_button = ctk.CTkButton(self.IMDB_frame, text="Create Playlist",
                                                          command=lambda: self.start_playlist_creation(
                                                              self.IMDB_playlist_url_textbox.get(),
@@ -109,16 +111,18 @@ class PlexPlaylistMakerGUI(ctk.CTk):
 
         # --- Letterboxd frame ---
         self.Letterboxd_frame = ctk.CTkFrame(self, corner_radius=0, fg_color="transparent")
-        self.Letterboxd_frame.library_var = tk.StringVar(self)
+        # Dedicated Letterboxd library variable
+        self.letterboxd_library_var = tk.StringVar(self)
+        self.Letterboxd_frame.library_var = self.letterboxd_library_var
         self.Letterboxd_playlist_url_textbox = ctk.CTkEntry(self.Letterboxd_frame, placeholder_text="Letterboxd List URL", width=200)
         self.Letterboxd_playlist_url_textbox.grid(row=0, column=0, padx=10, pady=10, sticky="w")
         self.Letterboxd_playlist_name_textbox = ctk.CTkEntry(self.Letterboxd_frame, placeholder_text="Leave blank for auto-title", width=200)
         self.Letterboxd_playlist_name_textbox.grid(row=1, column=0, padx=10, pady=10, sticky="w")
         self.Letterboxd_server_menu = ctk.CTkOptionMenu(self.Letterboxd_frame, variable=self.server_var, values=["Loading servers..."])
         self.Letterboxd_server_menu.grid(row=2, column=0, padx=10, pady=10, sticky="w")
-        self.library_var = tk.StringVar(self)
-        self.library_menu = ctk.CTkOptionMenu(self.Letterboxd_frame, variable=self.library_var, values=["Loading libraries..."])
-        self.library_menu.grid(row=3, column=0, padx=10, pady=10, sticky="w")
+        self.letterboxd_library_menu = ctk.CTkOptionMenu(self.Letterboxd_frame, variable=self.letterboxd_library_var, values=["Loading libraries..."])
+        self.letterboxd_library_menu.grid(row=3, column=0, padx=10, pady=10, sticky="w")
+        self.Letterboxd_frame.library_menu = self.letterboxd_library_menu
         self.letterboxd_create_playlist_button = ctk.CTkButton(self.Letterboxd_frame, text="Create Playlist",
                                                                command=lambda: self.start_playlist_creation(
                                                                    self.Letterboxd_playlist_url_textbox.get(),
@@ -257,8 +261,6 @@ class PlexPlaylistMakerGUI(ctk.CTk):
             self.controller = PlexIMDbApp(server=self.server_connection)
         # Ensure the server connection is set in the controller
         self.controller.server = self.server_connection
-        # Ensure the correct library_var is used for IMDb
-        self.library_var = self.IMDB_frame.library_var
 
     def switch_to_letterboxd_controller(self):
         """Switches the current controller to the Letterboxd controller."""
@@ -266,8 +268,6 @@ class PlexPlaylistMakerGUI(ctk.CTk):
             self.controller = PlexLetterboxdApp(server=self.server_connection)
         # Ensure the server connection is set in the controller
         self.controller.server = self.server_connection
-        # Ensure the correct library_var is used for Letterboxd
-        self.library_var = self.Letterboxd_frame.library_var
 
 
     def imdb_button_event(self):
@@ -397,6 +397,13 @@ class PlexPlaylistMakerGUI(ctk.CTk):
             lib_var.set(libraries[0])
         target_frame.library_menu = menu
         target_frame.library_var = lib_var
+        # Keep dedicated references in sync
+        if target_frame is self.IMDB_frame:
+            self.imdb_library_var = lib_var
+            self.imdb_library_menu = menu
+        elif target_frame is self.Letterboxd_frame:
+            self.letterboxd_library_var = lib_var
+            self.letterboxd_library_menu = menu
         
     def recreate_server_dropdown(self, frame, variable, servers, row, column, padx, pady, sticky):
         """
